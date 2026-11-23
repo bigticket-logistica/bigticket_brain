@@ -4661,11 +4661,13 @@ function ConciliacionTercerosMX({ usuario }) {
     // Todo lo que el carril B publicó al portal y todavía no está en ninguna
     // prefactura: ajustes de diferencias, no shows y mermas. Un solo botón los
     // baja a las tres, porque para el analista es la misma tarea del lunes.
-    const [aj, ns, mm] = await Promise.all([
+    // Los no show ya NO se bajan desde aquí (23-nov-2026): se agregan a la
+    // prefactura solo desde Cobros → No show, igual que los PNR. Un solo lugar.
+    const [aj, mm] = await Promise.all([
       sb.from("ajustes_pago_mx").select("*, terceros(nombre)").is("semana", null),
-      sb.from("cobros_noshow_mx").select("*, terceros(nombre)").eq("estado", "enviado").is("aplicado_semana", null),
       sb.from("cobros_merma_mx").select("*, terceros(nombre)").eq("estado", "enviado").is("aplicado_semana", null),
     ]);
+    const ns = { data: [] };
     const items = [];
     for (const a of (aj.data || [])) items.push({
       _tipo: "ajuste", id: a.id, empresa: a.terceros?.nombre, sc: a.service_center,

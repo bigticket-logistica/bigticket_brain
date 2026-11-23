@@ -939,6 +939,7 @@ function ModuloPnr({ usuario }) {
   const [abierto, setAbierto] = useState(null);
   const [semanaCobro, setSemanaCobro] = useState(() => semanaInventario(new Date().toISOString()));
   const [seleccion, setSeleccion] = useState({});
+  const [filtroPnr, setFiltroPnr] = useState("todos");   // mismo filtro que No Show
 
   const quien = (usuario && (usuario.nombre || usuario.email)) || "Brain";
 
@@ -1590,23 +1591,27 @@ function ModuloPnr({ usuario }) {
   // Borra el registro de cobros_pnr_mx, que es lo que ve el tercero y lo que
   // alimenta la prefactura diaria. No toca la conciliación semanal: si el cobro
   // también está en el carril A, hay que quitarlo de ahí por separado.
-  const quitarDelPortal = async (f, ya) => {
-    if (!window.confirm(
+  const quitarDelPortal = async (f, ya, motivo) => {
+    if (!motivo && !window.confirm(
       `¿Quitar este cobro del portal del tercero?\n\nPNR ${f.case_id} · ${ya.empresa_nombre} · -${money(ya.monto)}\n\n` +
       `Deja de verse en sus movimientos y sale de la prefactura diaria.\n` +
       `Si también está en la prefactura semanal, hay que quitarlo desde ahí.`
     )) return;
     setGuardando(f.case_id); setMsg(null);
     try {
-      const { error } = await sb.from("cobros_pnr_mx").delete().eq("pnr_id", String(f.case_id));
+      // Se ANULA, no se borra: si se borrara, el automático lo volvería a publicar.
+      const { error } = await sb.from("cobros_pnr_mx").update({
+        estado: "anulado", anulado_at: new Date().toISOString(),
+        anulado_motivo: `Eliminado por ${quien}: ${motivo || "sin motivo"}`,
+      }).eq("pnr_id", String(f.case_id));
       if (error) throw error;
-      setMsg({ ok: true, txt: `PNR ${f.case_id} quitado del portal. El caso vuelve a quedar pendiente.` });
+      setMsg({ ok: true, txt: `PNR ${f.case_id} eliminado: ya no se ve en el portal y no se vuelve a publicar solo.` });
       await cargar(semanaCobro, true);
     } catch (e) { setMsg({ ok: false, txt: "No se pudo quitar: " + (e.message || e) }); }
     setGuardando(null);
   };
 
-  const quitar = async (f, ya) => {
+  const quitar = async (f, ya, motivo) => {
     const sc = ya.service_center;
     const sem = Number(ya.semana);
     const { data: conc } = await sb.from("conciliaciones_terceros")
@@ -1614,7 +1619,7 @@ function ModuloPnr({ usuario }) {
       .eq("empresa_nombre", ya.empresa_nombre).eq("service_center", sc).eq("semana", sem).maybeSingle();
 
     const enviada = conc && String(conc.estado || "").toLowerCase() === "enviada";
-    if (!window.confirm(
+    if (!(motivo && !enviada) && !window.confirm(
       `¿Quitar este cobro?\n\nPNR ${f.case_id} · ${ya.empresa_nombre} · ${sc} · semana ${sem}\nMonto: -${money(ya.monto)}\n` +
       (enviada ? `\n⚠ Esta prefactura YA FUE ENVIADA al transportista. Va a volver a borrador y hay que generarla y enviarla de nuevo.\n` : "") +
       `\nEl caso vuelve a quedar pendiente y se puede cobrar otra vez.`
@@ -1643,16 +1648,20 @@ function ModuloPnr({ usuario }) {
             empresa_nombre: ya.empresa_nombre, service_center: sc, semana: sem,
             accion: "eliminar", origen_linea: "pnr",
             linea: conc.detalle.find(d => lineaId(d) === idLinea) || null,
-            motivo: `Cobro de PNR ${f.case_id} revertido desde la pestaña PNR`,
+            motivo: `Cobro de PNR ${f.case_id} eliminado desde Cobros → PNR${motivo ? ": " + motivo : ""}`,
             usuario: quien,
           });
         }
       }
 
-      const { error: eDel } = await sb.from("cobros_pnr_mx").delete().eq("pnr_id", String(f.case_id));
+      // Se ANULA, no se borra: si se borrara, el automático lo volvería a publicar.
+      const { error: eDel } = await sb.from("cobros_pnr_mx").update({
+        estado: "anulado", anulado_at: new Date().toISOString(),
+        anulado_motivo: `Eliminado por ${quien}: ${motivo || "sin motivo"}`,
+      }).eq("pnr_id", String(f.case_id));
       if (eDel) throw eDel;
 
-      setMsg({ ok: true, txt: `Cobro del PNR ${f.case_id} quitado de ${ya.empresa_nombre} · ${sc}. El caso vuelve a estar pendiente.` });
+      setMsg({ ok: true, txt: `PNR ${f.case_id} eliminado de la prefactura y del portal de ${ya.empresa_nombre} · ${sc}.` });
       await cargar(semana, true);
     } catch (e) {
       console.error("quitar cobro PNR:", e);
@@ -1769,7 +1778,7 @@ function ModuloPnr({ usuario }) {
         <input value={busqueda} onChange={e => setBusqueda(e.target.value)} placeholder="Buscar caso, chofer, placa…"
           style={{ padding: "6px 10px", fontSize: 12, border: "1px solid #e4e7ec", borderRadius: 6, width: 220 }} />
         <div style={{ fontSize: 11, color: "#64748b", display: "flex", alignItems: "center", gap: 6 }}>
-          Cobrar en semana
+          Agregar a prefactura de la semana
           <input type="number" value={semanaCobro}
             onChange={e => setSemanaCobro(Number(e.target.value) || semanaCobro)}
             style={{ width: 64, padding: "5px 6px", fontSize: 12, border: "1px solid #e4e7ec", borderRadius: 6 }} />
@@ -1778,257 +1787,149 @@ function ModuloPnr({ usuario }) {
           style={{ padding: "7px 14px", fontSize: 11, fontWeight: 600, background: "#fff", color: "#002E5D", border: "1px solid #002E5D", borderRadius: 6, cursor: (loading || !visibles.length) ? "not-allowed" : "pointer", opacity: (loading || !visibles.length) ? 0.5 : 1 }}>
           Descargar Excel
         </button>
-        <button onClick={agregarSeleccionados} disabled={!!guardando || loading || !nSeleccionados}
-          title="Agrega los casos tildados que tengan empresa resuelta"
-          style={{ padding: "7px 14px", fontSize: 11, fontWeight: 700, background: "#15803d", color: "#fff", border: "none", borderRadius: 6, cursor: (!!guardando || loading || !nSeleccionados) ? "not-allowed" : "pointer", opacity: (!!guardando || loading || !nSeleccionados) ? 0.5 : 1 }}>
-          {guardando === "todos" ? "Agregando…" : `Agregar seleccionados (${nSeleccionados})`}
-        </button>
         <button onClick={() => cargar(semana)} disabled={loading}
           style={{ padding: "7px 14px", fontSize: 11, fontWeight: 600, background: "#002E5D", color: "#fff", border: "none", borderRadius: 6, cursor: loading ? "not-allowed" : "pointer", opacity: loading ? 0.5 : 1 }}>
           {loading ? "Cargando…" : "Actualizar"}
         </button>
       </div>
 
-      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
-        <Kpi label="Pendientes de cobro" valor={pendientes.length} sub={`${visibles.length} cobrables en la semana`} />
-        <Kpi label="Enviados a facturación" valor={nFacturados} />
-        <Kpi label="Sin comprobante cargado" valor={nSinComprobante} sub={nSinComprobante ? "el supervisor respondió sin foto" : "ninguno esta semana"} />
-        <Kpi label="Monto por cobrar" valor={money(totalPend)} sub="suma del valor del paquete" />
-        <Kpi label="Cobrado en la semana" valor={money(montoCobrado)}
-          sub={yaCobrados.length
-            ? `${yaCobrados.length} caso(s): ${cobradoFact} facturado(s), ${cobradoSin} sin comprobante`
-            : "todavía no se carga ninguno"} />
-        <Kpi label="Total de la semana" valor={money(totalSemana)}
-          sub={`${yaCobrados.length + pendientes.length} caso(s) · cobrado + por cobrar`} />
-        <Kpi label="Sin empresa" valor={sinEmpresa} sub={sinEmpresa ? "requieren revisar la placa" : "todos resueltos"} />
-        {yaNoCobrables ? <Kpi label="Ya no cobrables" valor={yaNoCobrables} sub="cambiaron de estado en MELI" /> : null}
-      </div>
-
-      {msg ? (
-        <div style={{
-          padding: 10, marginBottom: 12, borderRadius: 6, fontSize: 12,
-          background: msg.ok ? "#e8f5e9" : "#fdecea", color: msg.ok ? "#1b5e20" : "#7f1d1d",
-        }}>{msg.txt}</div>
-      ) : null}
-
-      <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 10, overflow: "auto" }}>
-        <table style={{ width: "100%", borderCollapse: "collapse" }}>
-          <thead>
-            <tr>
-              <th style={{ ...th, width: 54, whiteSpace: "nowrap" }} title="Marca o desmarca todos los pendientes de la lista, incluidos los que no se ven en pantalla">
-                <span style={{ fontWeight: 700, color: nSeleccionados ? "#15803d" : "#94a3b8", marginRight: 4 }}>
-                  {nSeleccionados}/{cobrables.length}
-                </span>
-                <input type="checkbox" checked={todosTildados}
-                  onChange={e => {
-                    const v = e.target.checked; const sel = { ...seleccion };
-                    for (const f of cobrables) sel[f.case_id] = v;
-                    setSeleccion(sel);
-                  }} />
-              </th>
-              <th style={th}>PNR</th>
-              <th style={th}>Motivo del cobro</th>
-              <th style={th}>Pasó a cobro</th>
-              <th style={{ ...th, textAlign: "right" }}>Monto</th>
-              <th style={th}>Chofer</th>
-              <th style={th}>Placa</th>
-              <th style={th}>SC</th>
-              <th style={th}>Ruta</th>
-              <th style={th}>Empresa transportista</th>
-              <th style={th}>Avisos</th>
-              <th style={{ ...th, textAlign: "right" }}>Cobro</th>
-            </tr>
-          </thead>
-          <tbody>
-            {!loading && !visibles.length ? (
-              <tr><td style={{ ...td, textAlign: "center", color: "#94a3b8", padding: 30 }} colSpan={12}>
-                Sin PNR facturados en esta semana.
-              </td></tr>
-            ) : null}
-            {visibles.map(f => {
-              const ya = cobrados[String(f.case_id)];
-              return (
-                <Fragment key={f.case_id}>
-                  <tr style={{ background: abierto === f.case_id ? "#f8fafc" : (ya ? "#fbfdfb" : "transparent") }}>
-                    <td style={td}>
-                      {!ya && !bloqueo(f) ? (
-                        <input type="checkbox" checked={!!seleccion[f.case_id]}
-                          onChange={e => setSeleccion(s2 => ({ ...s2, [f.case_id]: e.target.checked }))} />
-                      ) : null}
-                    </td>
-                    <td style={{ ...td, fontWeight: 600 }}>
-                      {f.case_id}
-                      {f.shipment_id ? (
-                        <div style={{ fontSize: 9.5, color: "#64748b", fontWeight: 400 }}>guía {f.shipment_id}</div>
-                      ) : null}
-                      {f.sin_avisos ? (
-                        <div style={{ fontSize: 9, color: "#b45309", fontWeight: 600 }}>nació facturado</div>
-                      ) : null}
-                    </td>
-                    <td style={td}><ChipMotivo sub={f.sub_cobro} estadoActual={f.sub_estado} />
-                      {!f.sub_cobro ? (
-                        <div style={{ fontSize: 9, color: "#94a3b8", marginTop: 2 }}>{f.sub_estado || "—"}</div>
-                      ) : null}</td>
-                    <td style={td}>{fechaHora(f.facturado_en)}</td>
-                    <td style={{ ...td, textAlign: "right", fontWeight: 600 }}>{money(f.monto)}</td>
-                    <td style={td}>{f.conductor || "—"}</td>
-                    <td style={td}>{f.placa || <span style={{ color: "#b45309" }}>sin placa</span>}</td>
-                    <td style={td}>{f.service_center || "—"}</td>
-                    <td style={td}>
-                      {f.route_id || "—"}
-                      <div style={{ fontSize: 9, color: "#94a3b8" }}>
-                        {f.route_code || ""}
+      {(() => {
+        // ── Mismo modelo que No Show: un estado por caso, 4 tarjetas, filtros,
+        //    agrupado por día y una sola acción por fila. (23-nov-2026)
+        const estadoPnr = (f) => {
+          const id = String(f.case_id);
+          const ya = cobrados[id];
+          if (ya) return enPrefactura[id] ? "en_prefactura" : "en_portal";
+          if (anulados[id]) return "anulado";
+          if (!f.sub_cobro) return "no_cobrable";
+          return "pendiente";
+        };
+        const montoDe = (f) => { const c = cobrados[String(f.case_id)]; return Number((c && c.monto != null ? c.monto : f.monto) || 0); };
+        const filasE = visibles.map(f => ({ f, e: estadoPnr(f) }));
+        const de = (k) => filasE.filter(x => k.includes(x.e));
+        const suma = (xs) => xs.reduce((s, x) => s + montoDe(x.f), 0);
+        const G = {
+          en_portal: de(["en_portal"]), en_prefactura: de(["en_prefactura"]),
+          pendiente: de(["pendiente"]), anulado: de(["anulado", "no_cobrable"]),
+        };
+        const filtro = filtroPnr;
+        const setFiltro = setFiltroPnr;
+        const lista = filtro === "todos" ? filasE : G[filtro] || [];
+        const tarjeta = (k, titulo, sub, color) => (
+          <div key={k} onClick={() => setFiltro(filtro === k ? "todos" : k)} style={{ flex: "1 1 200px", background: "#fff", border: `1px solid ${filtro === k ? color : "#e4e7ec"}`, borderRadius: 10, padding: "10px 14px", cursor: "pointer" }}>
+            <div style={{ fontSize: 11, color: "#475569", fontWeight: 600 }}>{titulo}</div>
+            <div style={{ fontSize: 20, fontWeight: 800, color }}>{G[k].length}</div>
+            <div style={{ fontSize: 10.5, color: "#94a3b8" }}>{sub}</div>
+          </div>
+        );
+        const chip = (bg, fg, txt) => <span style={{ display: "inline-block", padding: "2px 8px", borderRadius: 999, background: bg, color: fg, fontSize: 10, fontWeight: 800 }}>{txt}</span>;
+        const diaMx = (iso) => { try { return new Intl.DateTimeFormat("en-CA", { timeZone: "America/Mexico_City" }).format(new Date(iso)); } catch { return String(iso || "").slice(0, 10); } };
+        const diaLargo = (d) => { try { return new Date(d + "T12:00:00").toLocaleDateString("es-MX", { weekday: "long", day: "numeric", month: "long" }); } catch { return d; } };
+        const grupos = {};
+        for (const x of lista) (grupos[diaMx(x.f.facturado_en)] = grupos[diaMx(x.f.facturado_en)] || []).push(x);
+        const dias = Object.keys(grupos).sort().reverse();
+        const btn = (txt, color, onClick, dis) => (
+          <button onClick={onClick} disabled={dis}
+            style={{ padding: "4px 10px", fontSize: 11, fontWeight: 700, borderRadius: 6, border: `1px solid ${color}`, background: "#fff", color, cursor: dis ? "not-allowed" : "pointer", opacity: dis ? 0.5 : 1, whiteSpace: "nowrap" }}>{txt}</button>
+        );
+        const pedirMotivo = (f) => {
+          const m = window.prompt(`Eliminar el cobro del PNR ${f.case_id}\n\nSale del portal del tercero y, si está, de la prefactura. No se vuelve a publicar solo.\n\n¿Por qué? (obligatorio)`, "");
+          if (m === null) return null;
+          if (!String(m).trim()) { setMsg({ ok: false, txt: "Sin motivo no se elimina." }); return null; }
+          return String(m).trim();
+        };
+        const eliminar = (f) => {
+          const ya = cobrados[String(f.case_id)];
+          if (!ya) return;
+          const m = pedirMotivo(f);
+          if (!m) return;
+          if (enPrefactura[String(f.case_id)]) quitar(f, ya, m); else quitarDelPortal(f, ya, m);
+        };
+        const cols = "70px 80px minmax(0,1.2fr) minmax(0,1.8fr) 90px 190px 190px";
+        return (
+          <>
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
+              {tarjeta("en_portal", "En el portal, falta prefactura", money(suma(G.en_portal)), "#b45309")}
+              {tarjeta("en_prefactura", "Ya en prefactura", money(suma(G.en_prefactura)), "#15803d")}
+              {tarjeta("pendiente", "No se publicaron solos", "sin empresa o anterior al corte", "#b91c1c")}
+              {tarjeta("anulado", "Anulados o eliminados", "no se cobran", "#64748b")}
+            </div>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
+              {[["todos", `Todos (${filasE.length})`], ["en_portal", `En portal · falta prefactura (${G.en_portal.length})`], ["en_prefactura", `En prefactura (${G.en_prefactura.length})`], ["pendiente", `No se publicaron (${G.pendiente.length})`], ["anulado", `Anulados o eliminados (${G.anulado.length})`]].map(([k, l]) => (
+                <button key={k} onClick={() => setFiltro(k)}
+                  style={{ padding: "5px 12px", fontSize: 11, fontWeight: 700, borderRadius: 999, border: "1px solid #cbd5e1", background: filtro === k ? "#002E5D" : "#fff", color: filtro === k ? "#fff" : "#334155", cursor: "pointer" }}>{l}</button>
+              ))}
+            </div>
+            {msg && <div style={{ marginBottom: 10, padding: "8px 12px", borderRadius: 8, fontSize: 12, background: msg.ok ? "#f0fdf4" : "#fef2f2", color: msg.ok ? "#166534" : "#991b1b" }}>{msg.txt}</div>}
+            {loading && <div style={{ fontSize: 12, color: "#64748b" }}>Cargando…</div>}
+            {!loading && !dias.length && <div style={{ fontSize: 12, color: "#64748b", padding: 20, textAlign: "center" }}>No hay PNR en esta vista para la semana {semana}.</div>}
+            {dias.map(d => (
+              <div key={d} style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 10, marginBottom: 12, overflow: "hidden" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", padding: "8px 14px", background: "#f8fafc" }}>
+                  <div style={{ fontSize: 13, fontWeight: 800, color: "#002E5D", textTransform: "capitalize" }}>{diaLargo(d)} <span style={{ fontSize: 11, fontWeight: 400, color: "#64748b", textTransform: "none" }}>· pasaron a cobro · {grupos[d].length} PNR</span></div>
+                  <div style={{ fontSize: 12, fontWeight: 800, color: "#b91c1c" }}>{money(suma(grupos[d]))}</div>
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: cols, gap: 8, padding: "6px 14px", fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", borderTop: "1px solid #f1f5f9" }}>
+                  <span>SC</span><span>Placa</span><span>Empresa</span><span>Detalle</span><span style={{ textAlign: "right" }}>Monto</span><span>Estado</span><span style={{ textAlign: "right" }}>Acciones</span>
+                </div>
+                {grupos[d].map(({ f, e }) => {
+                  const id = String(f.case_id);
+                  const ya = cobrados[id];
+                  const an = anulados[id];
+                  const m = MOTIVOS[f.sub_cobro] || {};
+                  const reemb = reembolsos.some(r => String(r.pnr_id) === id);
+                  const bq = bloqueo(f);
+                  const fondo = e === "en_prefactura" ? "#f0fdf4" : e === "pendiente" ? "#fef2f2" : e === "anulado" || e === "no_cobrable" ? "#f8fafc" : "#fff";
+                  return (
+                    <Fragment key={id}>
+                      <div style={{ display: "grid", gridTemplateColumns: cols, gap: 8, padding: "8px 14px", fontSize: 12, alignItems: "center", borderTop: "1px solid #f1f5f9", background: fondo }}>
+                        <span style={{ color: "#64748b" }}>{f.service_center || "—"}</span>
+                        <span style={{ fontWeight: 800, color: "#0f172a" }}>{f.placa || "—"}</span>
+                        <span>
+                          {(ya && ya.empresa_nombre) || empresaDe(f) || <span style={{ color: "#b91c1c" }}>Sin empresa</span>}
+                          {empresaCambiada(f) && <div style={{ fontSize: 10, color: "#7c3aed" }}>empresa cambiada a mano</div>}
+                        </span>
+                        <span style={{ fontSize: 11, color: "#475569" }}>
+                          PNR <b>{f.case_id}</b> · {m.label || f.sub_cobro || "ya no cobrable"} · guía {f.shipment_id || "—"}
+                          <div style={{ fontSize: 10.5, color: "#94a3b8" }}>
+                            {f.conductor || "—"} · ruta {f.route_id || "—"}{f.fecha_ruta ? ` del ${soloFecha(f.fecha_ruta)}` : ""}
+                            {" · "}<a onClick={() => setAbierto(abierto === id ? null : id)} style={{ color: "#1d4ed8", cursor: "pointer" }}>avisos ({(f.avisos || []).length})</a>
+                            {e !== "en_prefactura" && e !== "anulado" && <>{" · "}<a onClick={() => cambiarEmpresa(f)} style={{ color: "#1d4ed8", cursor: "pointer" }}>cambiar empresa</a></>}
+                          </div>
+                        </span>
+                        <span style={{ textAlign: "right", fontWeight: 800, color: "#b91c1c" }}>{money(montoDe(f))}</span>
+                        <span>
+                          {e === "en_prefactura" && chip("#dcfce7", "#166534", `EN PREFACTURA · sem ${ya.semana}`)}
+                          {e === "en_portal" && chip("#fef3c7", "#92400e", "EN PORTAL · falta prefactura")}
+                          {e === "pendiente" && chip("#fee2e2", "#991b1b", "NO SE PUBLICÓ")}
+                          {e === "anulado" && chip("#e2e8f0", "#334155", String(an?.anulado_motivo || "").startsWith("Eliminado") ? "ELIMINADO" : "ANULADO POR MELI")}
+                          {e === "no_cobrable" && chip("#e2e8f0", "#334155", "YA NO COBRABLE")}
+                          <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 2 }}>
+                            {ya ? (ya.origen === "automatico" ? "publicado solo" : "publicado a mano")
+                              : e === "pendiente" ? (bq || "pendiente de publicar")
+                              : an ? (an.anulado_motivo || "") : "MELI lo sacó de cobro"}
+                            {reemb && <span style={{ color: "#b91c1c", fontWeight: 700 }}> · reembolso pendiente</span>}
+                          </div>
+                        </span>
+                        <span style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                          {e === "en_portal" && btn(guardando === f.case_id ? "…" : "Agregar a prefactura", "#1d4ed8", () => agregar(f), !!guardando)}
+                          {(e === "en_portal" || e === "en_prefactura") && btn("Eliminar", "#b91c1c", () => eliminar(f), !!guardando)}
+                          {e === "pendiente" && btn(guardando === f.case_id ? "…" : "Publicar a mano", "#b45309", () => publicarUno(f), !!guardando || !!bq)}
+                        </span>
                       </div>
-                      <div style={{ fontSize: 9, color: "#94a3b8" }}>
-                        {soloFecha(f.fecha_ruta)}{f.semana_ruta != null ? ` · sem ${f.semana_ruta}` : ""}
-                      </div>
-                    </td>
-                    <td style={td}>
-                      {(() => {
-                        const emp = empresaDe(f);
-                        const ov = empresaCambiada(f);
-                        return (
-                          <div>
-                            <div>
-                              {emp ? emp : <span style={{ color: "#b45309", fontWeight: 600 }}>por asignar</span>}
-                            </div>
-                            {ov && (
-                              <div style={{ fontSize: 9, color: "#92400e", marginTop: 2 }}
-                                title={`Cambiada a mano por ${ov.usuario || "—"} el ${fechaHoraMx(ov.actualizado_at || ov.created_at)}.\nMotivo: ${ov.motivo || "—"}\nEl supervisor había declarado: ${f.empresa || "sin empresa"}.`}>
-                                cambiada a mano · {ov.usuario || "—"} · {fechaHoraMx(ov.actualizado_at || ov.created_at)}
-                              </div>
-                            )}
-                            <button onClick={() => cambiarEmpresa(f)}
-                              style={{ marginTop: 3, padding: "1px 6px", fontSize: 9, fontWeight: 700,
-                                background: "#eff6ff", color: "#1d4ed8", border: "1px solid #bfdbfe",
-                                borderRadius: 4, cursor: "pointer" }}>
-                              Cambiar empresa
-                            </button>
-                          </div>
-                        );
-                      })()}
-                    </td>
-                    <td style={{ ...td, cursor: "pointer" }} onClick={() => setAbierto(abierto === f.case_id ? null : f.case_id)}>
-                      {f.sin_avisos
-                        ? <span style={{ fontSize: 10, color: "#94a3b8" }}>sin avisos</span>
-                        : f.resumen_avisos.map(([tipo, n]) => <ChipResumen key={tipo} label={tipo} n={n} />)}
-                      <div style={{ fontSize: 9, color: "#94a3b8", marginTop: 2 }}>
-                        {abierto === f.case_id ? "ocultar detalle" : "ver detalle"}
-                      </div>
-                    </td>
-                    <td style={{ ...td, textAlign: "right", whiteSpace: "nowrap" }}>
-                      {!ya && anulados[String(f.case_id)] ? (
-                        <div style={{ textAlign: "center" }}>
-                          <div style={{ fontSize: 9.5, fontWeight: 700, color: "#64748b" }}>✕ anulado por MELI</div>
-                          <div style={{ fontSize: 8.5, color: "#94a3b8" }}>retirado del portal · {fechaHoraMx(anulados[String(f.case_id)].anulado_at)}</div>
-                          {reembolsos.some(r => String(r.pnr_id) === String(f.case_id)) && (
-                            <div style={{ fontSize: 8.5, color: "#b91c1c", fontWeight: 700 }}>reembolso pendiente</div>
-                          )}
-                        </div>
-                      ) : ya ? (
-                        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                          {/* CARRIL B · portal */}
-                          <div>
-                            <div style={{ fontSize: 9.5, fontWeight: 700, color: "#92400e" }}>✓ en el portal</div>
-                            <div style={{ fontSize: 8.5, color: "#94a3b8" }}>{ya.empresa_nombre}</div>
-                            <div style={{ fontSize: 8.5, color: "#94a3b8" }}>{ya.origen === "automatico" ? "publicado solo" : `publicado por ${ya.asignado_por || "—"}`}</div>
-                            <button onClick={() => quitarDelPortal(f, ya)} disabled={guardando === f.case_id}
-                              title="Solo del portal del tercero y de la prefactura diaria."
-                              style={{ marginTop: 3, width: "100%", padding: "3px 8px", fontSize: 9.5, fontWeight: 700,
-                                borderRadius: 5, border: "1px solid #f59e0b", background: "#fffbeb", color: "#92400e",
-                                cursor: guardando === f.case_id ? "not-allowed" : "pointer" }}>
-                              {guardando === f.case_id ? "…" : "Quitar del portal"}
-                            </button>
-                          </div>
-
-                          {/* CARRIL A · prefactura semanal */}
-                          <div>
-                            {enPrefactura[String(f.case_id)] ? (
-                              <>
-                                <div style={{ fontSize: 9.5, fontWeight: 700, color: "#1b5e20" }}>✓ en prefactura</div>
-                                <div style={{ fontSize: 8.5, color: "#94a3b8" }}>
-                                  {ya.service_center} · sem {ya.semana} · {ya.asignado_por}
-                                </div>
-                                <button onClick={() => quitar(f, ya)} disabled={guardando === f.case_id}
-                                  style={{ marginTop: 3, width: "100%", padding: "3px 8px", fontSize: 9.5, fontWeight: 700,
-                                    borderRadius: 5, border: "1px solid #fca5a5", background: "#fff", color: "#b91c1c",
-                                    cursor: guardando === f.case_id ? "not-allowed" : "pointer" }}>
-                                  {guardando === f.case_id ? "…" : "Quitar de prefactura"}
-                                </button>
-                              </>
-                            ) : (
-                              <>
-                                <button onClick={() => agregar(f)} disabled={guardando === f.case_id || !empresaDe(f) || !f.sub_cobro}
-                                  title="Agregar como línea negativa a la prefactura de la semana"
-                                  style={{ width: "100%", padding: "5px 10px", fontSize: 10.5, fontWeight: 700, borderRadius: 6, border: "none",
-                                    background: (empresaDe(f) && f.sub_cobro) ? "#002E5D" : "#e4e7ec",
-                                    color: (empresaDe(f) && f.sub_cobro) ? "#fff" : "#94a3b8",
-                                    cursor: (guardando === f.case_id || !empresaDe(f) || !f.sub_cobro) ? "not-allowed" : "pointer" }}>
-                                  {guardando === f.case_id ? "…" : "Agregar a prefactura"}
-                                </button>
-                                <div style={{ fontSize: 8.5, color: "#94a3b8", textAlign: "center", marginTop: 2 }}>semanal · carril A</div>
-                              </>
-                            )}
-                          </div>
-                        </div>
-                      ) : (
-                        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                          {/* CARRIL B · portal: la empresa la resuelve el modelo diario */}
-                          <div>
-                            <button onClick={() => publicarUno(f)} disabled={guardando === f.case_id || !f.placa || !f.sub_cobro}
-                              title={!f.sub_cobro ? "El caso ya no está en un estado cobrable"
-                                : !f.placa ? "Sin placa no se puede resolver la empresa"
-                                : "El tercero lo ve hoy en su portal. La empresa se resuelve por la placa, igual que el pago."}
-                              style={{
-                                width: "100%", padding: "5px 10px", fontSize: 10.5, fontWeight: 700, borderRadius: 6,
-                                border: "1px solid #f59e0b",
-                                background: (f.placa && f.sub_cobro) ? "#fffbeb" : "#f8fafc",
-                                color: (f.placa && f.sub_cobro) ? "#92400e" : "#94a3b8",
-                                cursor: (guardando === f.case_id || !f.placa || !f.sub_cobro) ? "not-allowed" : "pointer",
-                              }}>
-                              {guardando === f.case_id ? "…" : "Publicar al portal"}
-                            </button>
-                            <div style={{ fontSize: 8.5, color: "#94a3b8", textAlign: "center", marginTop: 2 }}>diario · carril B</div>
-                          </div>
-
-                          {/* CARRIL A · prefactura del lunes: la empresa la asigna el analista */}
-                          <div>
-                            <button onClick={() => agregar(f)} disabled={guardando === f.case_id || !empresaDe(f) || !f.sub_cobro}
-                              title={!f.sub_cobro ? "El caso ya no está en un estado cobrable" : (!empresaDe(f) ? "Falta resolver la empresa transportista" : "Agregar como línea negativa a la prefactura de la semana")}
-                              style={{
-                                width: "100%", padding: "5px 10px", fontSize: 10.5, fontWeight: 700, borderRadius: 6, border: "none",
-                                background: (empresaDe(f) && f.sub_cobro) ? "#002E5D" : "#e4e7ec", color: (empresaDe(f) && f.sub_cobro) ? "#fff" : "#94a3b8",
-                                cursor: (guardando === f.case_id || !empresaDe(f) || !f.sub_cobro) ? "not-allowed" : "pointer",
-                              }}>
-                              {guardando === f.case_id ? "…" : "Agregar a prefactura"}
-                            </button>
-                            <div style={{ fontSize: 8.5, color: "#94a3b8", textAlign: "center", marginTop: 2 }}>semanal · carril A</div>
-                            <div onClick={() => guardando ? null : agregarForzando(f)}
-                              title="Elegir a mano el SC donde se descuenta"
-                              style={{ marginTop: 2, fontSize: 9, color: "#002E5D", textDecoration: "underline", cursor: guardando ? "default" : "pointer", textAlign: "center" }}>
-                              forzar SC
-                            </div>
-                          </div>
+                      {abierto === id && (
+                        <div style={{ padding: "6px 14px 12px", background: "#f8fafc", borderTop: "1px solid #f1f5f9" }}>
+                          <DetalleAvisos lista={f.avisos || []} />
                         </div>
                       )}
-                    </td>
-                  </tr>
-                  {abierto === f.case_id ? (
-                    <tr>
-                      <td colSpan={12} style={{ padding: "10px 14px 14px 14px", background: "#f8fafc", borderBottom: "1px solid #e4e7ec" }}>
-                        <div style={{ fontSize: 10, fontWeight: 700, color: "#64748b", marginBottom: 6 }}>
-                          Historial de avisos
-                        </div>
-                        <DetalleAvisos lista={f.avisos} />
-                      </td>
-                    </tr>
-                  ) : null}
-                </Fragment>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
+                    </Fragment>
+                  );
+                })}
+              </div>
+            ))}
+          </>
+        );
+      })()}
     </div>
   );
 }
