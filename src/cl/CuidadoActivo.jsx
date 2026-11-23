@@ -4868,6 +4868,154 @@ function ChatWhatsApp({ quien }) {
   );
 }
 
+// ═══ Mantenedores del agente de IA del WhatsApp (Biggy Chile) ═══
+const AG_CFG_ORDEN = ["ag_modo", "ag_nombre", "ag_tono", "ag_max_lineas", "ag_saludo", "ag_firma", "ag_txt_fuera_tema", "ag_txt_no_registrado", "ag_txt_derivado", "ag_txt_fuera_horario",
+  "ag_hora_desde", "ag_hora_hasta", "ag_dias", "ag_derivar_a", "ag_plazo_humano_h", "ag_intentos_max", "ag_bigticket_rut", "wa_prueba"];
+const AG_CFG_LARGO = new Set(["ag_saludo", "ag_txt_fuera_tema", "ag_txt_no_registrado", "ag_txt_derivado", "ag_txt_fuera_horario"]);
+const AG_CFG_OPC = { ag_modo: [["apagado", "Apagado"], ["prueba", "Prueba"], ["marcha_blanca", "Marcha blanca"], ["activo", "Activo"]], ag_tono: [["tu", "Tú"], ["usted", "Usted"]] };
+function MantAgConfig({ quien }) {
+  const [filas, setFilas] = useState(null);
+  const [msg, setMsg] = useState("");
+  const cargar = () => api("ca_config_cl?or=(clave.like.ag_*,clave.eq.wa_prueba)&select=*").then(setFilas).catch(() => setFilas([]));
+  useEffect(() => { cargar(); }, []);
+  const guardar = async (clave, valor) => { setMsg(""); try { await rpc("fn_ca_mantenedor_guardar", { p_tabla: "ca_config_cl", p_clave: clave, p_campo: "valor", p_valor: valor, p_por: quien }); setMsg(`Guardado: ${clave}`); cargar(); } catch (e) { setMsg(e.message); } };
+  if (filas === null) return <div style={{ color: C.tenue }}>Cargando…</div>;
+  const orden = [...filas].sort((a, b) => (AG_CFG_ORDEN.indexOf(a.clave) + 1 || 99) - (AG_CFG_ORDEN.indexOf(b.clave) + 1 || 99));
+  return (
+    <div>
+      <div style={{ fontSize: 12, color: C.tenue, marginBottom: 10 }}>Cómo se presenta y escribe Biggy, sus textos fijos, el horario de atención humana y a quién deriva. En los textos, {"{nombre}"} se reemplaza por el nombre de la persona. El modo también se cambia desde Cuidado de Activo › Chat WhatsApp.</div>
+      {msg && <div style={{ fontSize: 12.5, marginBottom: 8, color: msg.startsWith("Guardado") ? C.verde : C.rojo }}>{msg}</div>}
+      <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12 }}>
+        {orden.map((x) => (
+          <div key={x.clave} style={{ display: "grid", gridTemplateColumns: "minmax(220px, 1fr) 2fr", gap: 12, padding: "10px 14px", borderBottom: `1px solid ${C.borde}`, alignItems: "start" }}>
+            <div><div style={{ fontSize: 13, fontWeight: 700, color: C.navy }}>{(x.descripcion || x.clave).replace(/^Agente WhatsApp: /, "")}</div><div style={{ fontSize: 11, color: C.tenue }}>{x.clave}</div></div>
+            {AG_CFG_OPC[x.clave]
+              ? <select style={{ ...inp, maxWidth: 220 }} value={x.valor} onChange={(e) => guardar(x.clave, e.target.value)}>{AG_CFG_OPC[x.clave].map(([k, t]) => <option key={k} value={k}>{t}</option>)}</select>
+              : AG_CFG_LARGO.has(x.clave)
+                ? <textarea style={{ ...inp, width: "100%", minHeight: 56, boxSizing: "border-box" }} defaultValue={x.valor} onBlur={(e) => e.target.value !== x.valor && guardar(x.clave, e.target.value)} />
+                : <input style={{ ...inp, width: "100%", maxWidth: 520, boxSizing: "border-box" }} defaultValue={x.valor} onBlur={(e) => e.target.value !== x.valor && guardar(x.clave, e.target.value)} />}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+const AG_TIPOS_COL = [["supervisor", "Supervisor"], ["empresa", "Empresa"], ["chofer", "Chofer"], ["ejecutivo", "Ejecutivo"], ["taller", "Taller"], ["jefe", "Jefe zonal"]];
+async function agGuardar(tabla, clave, datos, quien) { await rpc("fn_ag_mant_guardar", { p_tabla: tabla, p_clave: clave, p_datos: datos, p_por: quien }); }
+function MantAgConsultas({ quien }) {
+  const [filas, setFilas] = useState(null);
+  const [nueva, setNueva] = useState("");
+  const [msg, setMsg] = useState("");
+  const cargar = () => api("ca_ag_consultas_cl?select=*&order=orden").then(setFilas).catch(() => setFilas([]));
+  useEffect(() => { cargar(); }, []);
+  const g = async (x, datos) => { setMsg(""); try { await agGuardar("ca_ag_consultas_cl", x.codigo, datos, quien); setMsg("Guardado"); cargar(); } catch (e) { setMsg(e.message); } };
+  const agregar = async () => {
+    const n = Math.max(0, ...(filas || []).map((x) => Number(String(x.codigo).replace(/\D/g, "")) || 0)) + 1;
+    try { await agGuardar("ca_ag_consultas_cl", `C${n}`, { nombre: nueva.trim(), orden: n * 10 }, quien); setNueva(""); cargar(); } catch (e) { setMsg(e.message); }
+  };
+  if (filas === null) return <div style={{ color: C.tenue }}>Cargando…</div>;
+  const celda = { padding: "6px 8px", borderBottom: `1px solid ${C.borde}`, fontSize: 12.5, textAlign: "center" };
+  return (
+    <div>
+      <div style={{ fontSize: 12, color: C.tenue, marginBottom: 10 }}>Qué puede consultar cada tipo de persona. Biggy solo responde con los datos de esa persona. Una consulta nueva sin datos asociados en el sistema se responde solo con información general (para que traiga datos, pídelo como desarrollo).</div>
+      {msg && <div style={{ fontSize: 12.5, marginBottom: 8, color: msg === "Guardado" ? C.verde : C.rojo }}>{msg}</div>}
+      <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 900 }}>
+          <thead><tr style={{ background: C.fondo }}><th style={{ ...celda, textAlign: "left", color: C.suave }}>Consulta</th>{AG_TIPOS_COL.map(([k, t]) => <th key={k} style={{ ...celda, color: C.suave }}>{t}</th>)}<th style={{ ...celda, color: C.suave }}>Activa</th></tr></thead>
+          <tbody>{filas.map((x) => (
+            <tr key={x.codigo} style={{ opacity: x.activo ? 1 : 0.5 }}>
+              <td style={{ ...celda, textAlign: "left" }}><input style={{ ...inp, width: "100%", minWidth: 300, padding: "3px 6px", boxSizing: "border-box" }} defaultValue={x.nombre} onBlur={(e) => e.target.value.trim() && e.target.value !== x.nombre && g(x, { nombre: e.target.value.trim() })} /><div style={{ fontSize: 11, color: C.tenue, textAlign: "left" }}>{x.codigo}</div></td>
+              {AG_TIPOS_COL.map(([k]) => <td key={k} style={celda}><input type="checkbox" checked={!!x[k]} onChange={(e) => g(x, { [k]: e.target.checked })} /></td>)}
+              <td style={celda}><input type="checkbox" checked={!!x.activo} onChange={(e) => g(x, { activo: e.target.checked })} /></td>
+            </tr>
+          ))}</tbody>
+        </table>
+      </div>
+      <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+        <input style={{ ...inp, minWidth: 340 }} placeholder="Nueva consulta (ej.: Estado de un siniestro)" value={nueva} onChange={(e) => setNueva(e.target.value)} />
+        <button style={btn()} disabled={!nueva.trim()} onClick={agregar}>Agregar</button>
+      </div>
+    </div>
+  );
+}
+
+function MantAgFaq({ quien }) {
+  const [filas, setFilas] = useState(null);
+  const [n, setN] = useState({ pregunta: "", quien: "", respuesta: "" });
+  const [msg, setMsg] = useState("");
+  const cargar = () => api("ca_ag_faq_cl?select=*&order=orden").then(setFilas).catch(() => setFilas([]));
+  useEffect(() => { cargar(); }, []);
+  const g = async (x, datos) => { setMsg(""); try { await agGuardar("ca_ag_faq_cl", x.codigo, datos, quien); setMsg("Guardado"); cargar(); } catch (e) { setMsg(e.message); } };
+  const agregar = async () => {
+    const k = Math.max(0, ...(filas || []).map((x) => Number(String(x.codigo).replace(/\D/g, "")) || 0)) + 1;
+    try { await agGuardar("ca_ag_faq_cl", `H${k}`, { pregunta: n.pregunta.trim(), quien: n.quien.trim() || null, respuesta: n.respuesta.trim(), orden: k * 10 }, quien); setN({ pregunta: "", quien: "", respuesta: "" }); cargar(); } catch (e) { setMsg(e.message); }
+  };
+  if (filas === null) return <div style={{ color: C.tenue }}>Cargando…</div>;
+  return (
+    <div>
+      <div style={{ fontSize: 12, color: C.tenue, marginBottom: 10 }}>Las preguntas que más hacen y cómo las responde el área. Biggy las usa como modelo (mismo tono y contenido) y completa lo que va entre corchetes con los datos de la persona. «Quién la hace»: supervisor, empresa, chofer, taller o jefe (separados por coma).</div>
+      {msg && <div style={{ fontSize: 12.5, marginBottom: 8, color: msg === "Guardado" ? C.verde : C.rojo }}>{msg}</div>}
+      {filas.map((x) => (
+        <div key={x.codigo} style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, padding: 12, marginBottom: 10, opacity: x.activo ? 1 : 0.55 }}>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 6 }}>
+            <b style={{ color: C.navy }}>{x.codigo}</b>
+            <input style={{ ...inp, flex: "1 1 320px", padding: "3px 6px" }} defaultValue={x.pregunta} onBlur={(e) => e.target.value.trim() && e.target.value !== x.pregunta && g(x, { pregunta: e.target.value.trim() })} />
+            <input style={{ ...inp, width: 170, padding: "3px 6px" }} placeholder="Quién la hace" defaultValue={x.quien || ""} onBlur={(e) => e.target.value !== (x.quien || "") && g(x, { quien: e.target.value.trim() || null })} />
+            <label style={{ fontSize: 12.5, display: "flex", gap: 5, alignItems: "center" }}><input type="checkbox" checked={!!x.activo} onChange={(e) => g(x, { activo: e.target.checked })} /> Activa</label>
+          </div>
+          <textarea style={{ ...inp, width: "100%", minHeight: 70, boxSizing: "border-box" }} defaultValue={x.respuesta} onBlur={(e) => e.target.value.trim() && e.target.value !== x.respuesta && g(x, { respuesta: e.target.value.trim() })} />
+        </div>
+      ))}
+      <div style={{ background: "#fff", border: `1px solid ${C.navy}`, borderRadius: 12, padding: 12 }}>
+        <div style={{ fontWeight: 700, color: C.navy, marginBottom: 6 }}>Agregar respuesta tipo</div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 6 }}>
+          <input style={{ ...inp, flex: "1 1 320px" }} placeholder="Pregunta que suelen hacer" value={n.pregunta} onChange={(e) => setN({ ...n, pregunta: e.target.value })} />
+          <input style={{ ...inp, width: 170 }} placeholder="Quién la hace" value={n.quien} onChange={(e) => setN({ ...n, quien: e.target.value })} />
+        </div>
+        <textarea style={{ ...inp, width: "100%", minHeight: 70, boxSizing: "border-box" }} placeholder="Cómo la responde el área" value={n.respuesta} onChange={(e) => setN({ ...n, respuesta: e.target.value })} />
+        <button style={{ ...btn(), marginTop: 6 }} disabled={!n.pregunta.trim() || !n.respuesta.trim()} onClick={agregar}>Agregar</button>
+      </div>
+    </div>
+  );
+}
+
+function MantAgAseguradoras({ quien }) {
+  const [filas, setFilas] = useState(null);
+  const [n, setN] = useState({ nombre: "", telefono: "", menu: "", rut_leasing: "" });
+  const [msg, setMsg] = useState("");
+  const cargar = () => api("ca_ag_aseguradoras_cl?select=*&order=nombre").then(setFilas).catch(() => setFilas([]));
+  useEffect(() => { cargar(); }, []);
+  const g = async (nombre, datos) => { setMsg(""); try { await agGuardar("ca_ag_aseguradoras_cl", nombre, datos, quien); setMsg("Guardado"); cargar(); } catch (e) { setMsg(e.message); } };
+  if (filas === null) return <div style={{ color: C.tenue }}>Cargando…</div>;
+  const celda = { padding: "6px 8px", borderBottom: `1px solid ${C.borde}`, fontSize: 12.5 };
+  const campo = (x, k, w) => <input style={{ ...inp, width: w, padding: "3px 6px" }} defaultValue={x[k] || ""} onBlur={(e) => e.target.value !== (x[k] || "") && g(x.nombre, { [k]: e.target.value.trim() || null })} />;
+  return (
+    <div>
+      <div style={{ fontSize: 12, color: C.tenue, marginBottom: 10 }}>Para pedir una grúa fuera del horario hábil, Biggy entrega el teléfono de la aseguradora del vehículo (según la ficha del activo: seguro o banco del leasing), su menú y el RUT: el del banco si tiene leasing; si no, el de Bigticket (Agente: configuración › ag_bigticket_rut). En horario hábil la grúa la gestiona Cuidado de Activo.</div>
+      {msg && <div style={{ fontSize: 12.5, marginBottom: 8, color: msg === "Guardado" ? C.verde : C.rojo }}>{msg}</div>}
+      <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 820 }}>
+          <thead><tr style={{ background: C.fondo, textAlign: "left" }}>{["Aseguradora", "Teléfono", "Menú telefónico", "RUT si tiene leasing con este banco", "Activa"].map((h) => <th key={h} style={{ ...celda, color: C.suave }}>{h}</th>)}</tr></thead>
+          <tbody>{filas.map((x) => (
+            <tr key={x.nombre} style={{ opacity: x.activo ? 1 : 0.5 }}>
+              <td style={celda}><b>{x.nombre}</b></td><td style={celda}>{campo(x, "telefono", 130)}</td><td style={celda}>{campo(x, "menu", 320)}</td><td style={celda}>{campo(x, "rut_leasing", 130)}</td>
+              <td style={celda}><input type="checkbox" checked={!!x.activo} onChange={(e) => g(x.nombre, { activo: e.target.checked })} /></td>
+            </tr>
+          ))}</tbody>
+        </table>
+      </div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
+        <input style={{ ...inp, width: 150 }} placeholder="Aseguradora (ej.: ZURICH)" value={n.nombre} onChange={(e) => setN({ ...n, nombre: e.target.value.toUpperCase() })} />
+        <input style={{ ...inp, width: 130 }} placeholder="Teléfono" value={n.telefono} onChange={(e) => setN({ ...n, telefono: e.target.value })} />
+        <input style={{ ...inp, width: 260 }} placeholder="Menú telefónico" value={n.menu} onChange={(e) => setN({ ...n, menu: e.target.value })} />
+        <input style={{ ...inp, width: 130 }} placeholder="RUT leasing" value={n.rut_leasing} onChange={(e) => setN({ ...n, rut_leasing: e.target.value })} />
+        <button style={btn()} disabled={!n.nombre.trim() || !n.telefono.trim()} onClick={async () => { await g(n.nombre.trim(), { telefono: n.telefono.trim(), menu: n.menu.trim() || null, rut_leasing: n.rut_leasing.trim() || null }); setN({ nombre: "", telefono: "", menu: "", rut_leasing: "" }); }}>Agregar</button>
+      </div>
+    </div>
+  );
+}
+
 // ═══ Mantenedores de Cuidado de Activo: se muestran en el Mantenedor general del Brain (Mantenedor.jsx) ═══
 // [clave, nombre, grupo]. El Mantenedor arma las pestañas con esta lista; aquí se dibuja cada uno.
 export const CA_MANTENEDORES = [
@@ -4877,6 +5025,8 @@ export const CA_MANTENEDORES = [
   ["aud_form", "Formularios de auditoría", "Auditorías"], ["aud_tipos", "Tipos de auditoría", "Auditorías"], ["feriados", "Feriados", "Auditorías"],
   ["fleetup", "Alertas de cámara (español)", "GPS y bitácora"], ["bit_ind", "Indicadores de la bitácora", "GPS y bitácora"],
   ["wa_contactos", "Contactos", "WhatsApp"], ["wa_plantillas", "Plantillas", "WhatsApp"], ["wa_envios", "Envíos", "WhatsApp"],
+  ["ag_config", "Agente: configuración", "WhatsApp"], ["ag_consultas", "Agente: consultas por persona", "WhatsApp"],
+  ["ag_faq", "Agente: respuestas tipo", "WhatsApp"], ["ag_aseguradoras", "Agente: aseguradoras (grúas)", "WhatsApp"],
 ];
 function MantenedorCA({ vista, quien, rol }) {
   const puede = rol === "superadmin";
@@ -4898,6 +5048,10 @@ function MantenedorCA({ vista, quien, rol }) {
     case "wa_contactos": return <MantContactosWa quien={quien} />;
     case "wa_plantillas": return <MantPlantillasWa quien={quien} />;
     case "wa_envios": return <EnviosWa />;
+    case "ag_config": return <MantAgConfig quien={quien} />;
+    case "ag_consultas": return <MantAgConsultas quien={quien} />;
+    case "ag_faq": return <MantAgFaq quien={quien} />;
+    case "ag_aseguradoras": return <MantAgAseguradoras quien={quien} />;
     default: return <div style={{ color: C.tenue }}>Mantenedor no encontrado.</div>;
   }
 }
