@@ -709,8 +709,11 @@ export async function agregarAlertasCertificacion(fecha, filas) {
     // Retención (21-nov-2026): si falla un control ENCENDIDO y Certificaciones
     // no la habilitó, la ruta no se paga. Su monto queda guardado en
     // viajes_retenidos_mx y se paga cuando se regulariza o se habilita.
+    // Se retiene SIEMPRE que falle un control encendido, aunque la ruta ya no
+    // se pague por otra regla (por ejemplo, visitado bajo el 90%): Certificaciones
+    // decide si la habilita, y la empresa la ve como retenida en su portal.
     const monto = Number(f.pago_neto || 0);
-    if (r.retener && monto > 0) {
+    if (r.retener) {
       retenidas.push({
         id_ruta: String(f.id_ruta), tercero_id: r.tercero_id || null, empresa: r.empresa || null,
         placa: f.placa || null, service_center: f.service_center_id || null,
@@ -718,7 +721,9 @@ export async function agregarAlertasCertificacion(fecha, filas) {
       });
       f.pago_neto = 0;
       f.observaciones = [f.observaciones,
-        `⛔ RETENIDO por certificación: ${r.motivos_retencion || "control encendido"} · se habría pagado $${monto.toFixed(2)} · lo habilita Certificaciones`]
+        `⛔ RETENIDO por certificación: ${r.motivos_retencion || "control encendido"} · `
+        + (monto > 0 ? `se habría pagado $${monto.toFixed(2)}` : "además no se paga por otra regla")
+        + " · lo habilita Certificaciones"]
         .filter(Boolean).join(" | ");
     }
   }
