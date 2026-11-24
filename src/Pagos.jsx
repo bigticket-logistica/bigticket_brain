@@ -18,6 +18,21 @@ import RechazosMeliMX from "./RechazosMeli";
 import Capacidad from "./Capacidad";
 import { FotoLink, NOSAL_CASO, NOSAL_DESDE, NOSAL_MOTIVO, NoSalidasSC, etiquetaNosal } from "./NoSalidas";
 
+// ── Lectura completa por páginas (24-nov-2026) ──────────────────────────────
+// La base entrega como MÁXIMO 1.000 filas por consulta, aunque se pida más con
+// .limit(). Esta función pide de a 1.000 hasta traer todo. Recibe una función
+// que arma la consulta (sin .limit ni .range) y devuelve { data, error }.
+async function traerTodo(armar, tam = 1000) {
+  const out = [];
+  for (let i = 0; ; i += tam) {
+    const { data, error } = await armar().range(i, i + tam - 1);
+    if (error) return { data: out.length ? out : null, error };
+    out.push(...(data || []));
+    if (!data || data.length < tam) return { data: out, error: null };
+  }
+}
+
+
 function BotonDescargarExcel({ onClick, disabled, label = "Descargar Excel" }) {
   return (
     <button onClick={onClick} disabled={disabled} className="btn-blue"
@@ -2360,13 +2375,12 @@ function PoolMeliAmbulancias() {
     setExcelBusy(true);
     try {
       // Traer TODO el rango desde la vista (no solo el día en pantalla)
-      const { data, error } = await sb
+      const { data, error } = await traerTodo(() => sb
         .from("vw_ambulancias_diario")
         .select("*")
         .gte("fecha", desde).lte("fecha", hasta)
         .order("fecha")
-        .order("paquetes_traspasados", { ascending: false })
-        .limit(100000);
+        .order("paquetes_traspasados", { ascending: false }));
       if (error) throw error;
       const rango = (data || []).filter(f => scFiltro === "TODOS" || f.service_center_id === scFiltro);
 
@@ -2966,9 +2980,9 @@ function ConciliacionTercerosMX({ usuario }) {
   const cargarSellos = async (sem) => {
     const sm = sem != null ? sem : semana;
     try {
-      const { data, error } = await sb.from("prefactura_viajes_enviados")
+      const { data, error } = await traerTodo(() => sb.from("prefactura_viajes_enviados")
         .select("fecha, id_ruta, empresa_nombre, service_center, enviado_at")
-        .eq("semana", sm).not("id_ruta", "is", null).limit(20000);
+        .eq("semana", sm).not("id_ruta", "is", null).order("id_ruta"));
       if (error) throw error;
       const m = {};
       for (const r of data || []) {
@@ -6491,7 +6505,7 @@ function TercerosMX() {
   const cargar = async () => {
     setLoading(true);
     try {
-      const { data } = await sb.from("flota_terceros_mx").select("*").order("semana", { ascending: false }).order("placa").limit(50000);
+      const { data } = await traerTodo(() => sb.from("flota_terceros_mx").select("*").order("semana", { ascending: false }).order("placa"));
       setRows(data || []);
     } catch (e) { console.error(e); }
     setLoading(false);
@@ -7340,7 +7354,7 @@ function ListadoPagosDiarios({ usuario }) {
     let cancel = false;
     (async () => {
       try {
-        const { data } = await sb.from("flota_terceros_mx").select("placa, empresa_transporte, semana").limit(50000);
+        const { data } = await traerTodo(() => sb.from("flota_terceros_mx").select("placa, empresa_transporte, semana").order("semana").order("placa"));
         if (cancel) return;
         const ord = (data || []).slice().sort((a, b) => (b.semana || 0) - (a.semana || 0));
         const m = {};
@@ -7359,7 +7373,7 @@ function ListadoPagosDiarios({ usuario }) {
     if (sem == null) { setEmpresaMapSem({}); return; }
     (async () => {
       try {
-        const { data } = await sb.from("flota_terceros_mx").select("placa, empresa_transporte").eq("semana", sem).limit(50000);
+        const { data } = await traerTodo(() => sb.from("flota_terceros_mx").select("placa, empresa_transporte").eq("semana", sem).order("placa"));
         if (cancel) return;
         const acc = {};
         for (const r of data || []) {
@@ -7660,8 +7674,8 @@ function ListadoPagosDiarios({ usuario }) {
     if (desde > hasta) { alert("La fecha \"desde\" no puede ser mayor que \"hasta\"."); return; }
     setExcelBusy(true);
     try {
-      const { data, error } = await sb.from("maestro_jornada_mx").select("*")
-        .gte("fecha", desde).lte("fecha", hasta).order("fecha").order("driver_name").limit(50000);
+      const { data, error } = await traerTodo(() => sb.from("maestro_jornada_mx").select("*")
+        .gte("fecha", desde).lte("fecha", hasta).order("fecha").order("driver_name").order("id_ruta"));
       if (error) throw error;
       const filas = data || [];
       if (filas.length === 0) { alert(`No hay pagos guardados entre ${desde} y ${hasta}.`); setExcelBusy(false); return; }
@@ -7671,7 +7685,7 @@ function ListadoPagosDiarios({ usuario }) {
       try {
         const semanasRango = [...new Set(filas.map(p => semanaInventario(p.fecha)).filter(s => s != null))];
         if (semanasRango.length) {
-          const { data: fl } = await sb.from("flota_terceros_mx").select("semana, placa, empresa_transporte").in("semana", semanasRango).limit(50000);
+          const { data: fl } = await traerTodo(() => sb.from("flota_terceros_mx").select("semana, placa, empresa_transporte").in("semana", semanasRango).order("semana").order("placa"));
           const acc = {};
           for (const f of fl || []) {
             const e = String(f.empresa_transporte || "").trim(); if (!e) continue;
@@ -10740,7 +10754,7 @@ function ConfigPorPagar({ usuario }) {
   const cargar = async () => {
     setLoading(true);
     try {
-      const { data: dAll } = await sb.from("matriz_precios").select("*");
+      const { data: dAll } = await traerTodo(() => sb.from("matriz_precios").select("*"));
       // Solo las filas de ZONA (sin site ni tipo_ruta) alimentan estas grillas.
       // Las excepciones por SC se editan en el panel Tarifas por service center.
       const d = (dAll || []).filter(r => !r.site && !r.tipo_ruta);
@@ -10948,9 +10962,9 @@ function TarifasPorSC({ usuario, onCambio }) {
       const desde30 = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
       const [zRes, mRes, cRes, uRes] = await Promise.all([
         sb.from("sc_zonas_mx").select("service_center_id, zona"),
-        sb.from("matriz_precios").select("*"),
+        traerTodo(() => sb.from("matriz_precios").select("*")),
         sb.from("matriz_precios_cargas").select("*").order("created_at", { ascending: false }).limit(20),
-        sb.from("maestro_jornada_mx").select("service_center_id").gte("fecha", desde30).limit(20000),
+        traerTodo(() => sb.from("maestro_jornada_mx").select("service_center_id").gte("fecha", desde30).order("fecha")),
       ]);
       const u = {};
       for (const r of (uRes.data || [])) { const k = String(r.service_center_id || "").toUpperCase(); if (k) u[k] = (u[k] || 0) + 1; }

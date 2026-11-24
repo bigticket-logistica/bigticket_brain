@@ -2,6 +2,21 @@ import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { descargarExcelMultihoja, sb } from "./shared";
 import { avisarPortal } from "./avisarPortal";
 
+// ── Lectura completa por páginas (24-nov-2026) ──────────────────────────────
+// La base entrega como MÁXIMO 1.000 filas por consulta, aunque se pida más con
+// .limit(). Esta función pide de a 1.000 hasta traer todo. Recibe una función
+// que arma la consulta (sin .limit ni .range) y devuelve { data, error }.
+async function traerTodo(armar, tam = 1000) {
+  const out = [];
+  for (let i = 0; ; i += tam) {
+    const { data, error } = await armar().range(i, i + tam - 1);
+    if (error) return { data: out.length ? out : null, error };
+    out.push(...(data || []));
+    if (!data || data.length < tam) return { data: out, error: null };
+  }
+}
+
+
 // ─── PNR — Cobro a terceros ─────────────────────────────────────────
 // Lista los PNR cobrables de la semana y permite agregar cada uno a la
 // conciliación del transportista como línea negativa, dejando registro
@@ -250,7 +265,7 @@ function ModuloRobos({ usuario }) {
   const cargar = useCallback(async () => {
     setFilas(null);
     const [paq, cob, concs] = await Promise.all([
-      sb.from("vw_paquetes_cobrables").select("*").gte("fecha_ruta", HITO_CERO).limit(2000),
+      traerTodo(() => sb.from("vw_paquetes_cobrables").select("*").gte("fecha_ruta", HITO_CERO).order("fecha_ruta")),
       sb.from("cobros_merma_mx").select("*").eq("estado", "enviado"),
       sb.from("conciliaciones_terceros").select("detalle").eq("semana", Number(semana)),
     ]);
@@ -1020,8 +1035,8 @@ function ModuloPnr({ usuario }) {
       const semanas = [...new Set(Object.values(jornada).map(j => semanaInventario(j.fecha)).filter(s => s != null))];
       const empSem = {};
       if (semanas.length) {
-        const { data: fl } = await sb.from("flota_terceros_mx")
-          .select("semana, placa, empresa_transporte").in("semana", semanas).limit(50000);
+        const { data: fl } = await traerTodo(() => sb.from("flota_terceros_mx")
+          .select("semana, placa, empresa_transporte").in("semana", semanas).order("semana").order("placa"));
         const acc = {};
         for (const f of fl || []) {
           const e = String(f.empresa_transporte || "").trim(); if (!e) continue;
