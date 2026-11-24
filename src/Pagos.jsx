@@ -9379,7 +9379,23 @@ function AyudantesDetalleDia({ usuario }) {
       // El reparto chofer/ayudante se proyecta sobre los paquetes consultados.
       const baseMuestra = r.total - (r.noMuestreado || 0);
       const pct = (n) => baseMuestra > 0 ? Math.round((n / baseMuestra) * 1000) / 10 : 0;
-      const driverPaq = driverRows.reduce((a, p) => a + p.paquetes, 0);
+      // Paquetes por persona PROYECTADOS al total de la ruta (muestra del 60%,
+      // 23-nov-2026): así chofer + ayudante(s) suman lo mismo que la cobertura
+      // (ej. 107 + 18 = 125 / 125). Reparto por mayor resto: la suma es exacta.
+      const proyectar = (valores) => {
+        if (!(baseMuestra > 0) || baseMuestra === r.total) return valores;
+        const f = r.total / baseMuestra;
+        const crudos = valores.map(v => v * f);
+        const ent = crudos.map(Math.floor);
+        let resto = r.total - ent.reduce((a, b) => a + b, 0);
+        const orden = crudos.map((c, i) => [c - Math.floor(c), i]).sort((a, b) => b[0] - a[0]);
+        for (let j = 0; j < orden.length && resto > 0; j++, resto--) ent[orden[j][1]]++;
+        return ent;
+      };
+      const helperOrd = helperRows.slice().sort((a, b) => b.paquetes - a.paquetes);
+      const driverPaqReal = driverRows.reduce((a, p) => a + p.paquetes, 0);
+      const proy = proyectar([driverPaqReal, ...helperOrd.map(h => h.paquetes), r.sinRegistro || 0]);
+      const driverPaq = proy[0];
       const esperado = m && m.envios_entregados != null ? Number(m.envios_entregados) : null;
       const cobertura = esperado ? Math.round((r.total / esperado) * 100) : null;
       let estadoFila = helperRows.length > 0 ? "OK" : "SOLO_DRIVER";
@@ -9390,9 +9406,9 @@ function AyudantesDetalleDia({ usuario }) {
         sc: r.sc || (m && m.service_center_id) || null,
         driver_name: r.driver_name || (m && m.driver_name) || null,
         driver_paq: driverPaq,
-        driver_pct: pct(driverPaq),
-        helpers: helperRows.sort((a, b) => b.paquetes - a.paquetes).map(h => ({
-          nombre: limpiarNombre(h.nombre), user_id: h.user_id, paquetes: h.paquetes, pct: pct(h.paquetes),
+        driver_pct: pct(driverPaqReal),
+        helpers: helperOrd.map((h, i) => ({
+          nombre: limpiarNombre(h.nombre), user_id: h.user_id, paquetes: proy[1 + i], pct: pct(h.paquetes),
         })),
         total: r.total,
         esperado,
