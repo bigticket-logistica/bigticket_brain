@@ -4,7 +4,8 @@ import { useState } from "react";
 // CERTRONIC · CHILE — Aviso de actualización
 // Usuarios no técnicos (analista): solo ven un aviso simple cuando los datos
 // llevan más de HORAS_MAX_SIN_DATOS sin actualizarse. Nada más.
-// Superadmin (tecnico = true): ve además las advertencias de cada corrida,
+// Usuarios técnicos (tecnico = true, ver USUARIOS_TECNICOS en index.jsx): ven
+// además las advertencias de cada corrida,
 // qué información queda afectada y el comando para reintentar en el servidor.
 // ═══════════════════════════════════════════════════════════════════════════
 

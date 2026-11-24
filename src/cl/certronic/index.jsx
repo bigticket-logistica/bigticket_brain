@@ -24,9 +24,11 @@ import { DashboardVehiculos } from "./Vehiculos";
 //   - certronic_pipeline_runs          (historial de corridas del pipeline)
 //   - certronic_overrides_analista     (correcciones manuales del analista)
 // ═══════════════════════════════════════════════════════════════════════════
+// Únicos usuarios que ven el detalle técnico de las corridas (pasos y comandos).
+const USUARIOS_TECNICOS = ["eduardo.stine@bigticket.cl", "camilo.naranjo@bigticket.cl"];
+
 function ModuloPagos({ usuario }) {
-  // El detalle técnico de las corridas (pasos y comandos) solo lo ve superadmin.
-  const esTecnico = usuario?.rol === "superadmin";
+  const esTecnico = USUARIOS_TECNICOS.includes(String(usuario?.email || "").trim().toLowerCase());
   const [datos, setDatos] = useState({ pc: [], ryc: [], sub: [] });
   const [loading, setLoading] = useState(true);
   const [periodo, setPeriodo] = useState(""); // YYYY-MM
