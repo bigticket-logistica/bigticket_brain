@@ -27,7 +27,7 @@ function ModuloCertificacionesCL({ usuario }) {
         <div style={{ fontSize: 15, fontWeight: 700, color: "#FF6600", fontFamily: "Poppins, 'Open Sans', sans-serif", marginTop: 2 }}>{(TABS_CERT_CL.find((t) => t.id === subtab) || {}).label}</div>
       </div>
       {subtab === "accesos" && <AccesosPortalCL usuario={usuario} />}
-      {subtab === "pagos" && <CertronicPagos />}
+      {subtab === "pagos" && <CertronicPagos usuario={usuario} />}
     </div>
   );
 }
