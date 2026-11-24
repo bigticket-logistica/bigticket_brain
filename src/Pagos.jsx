@@ -7682,7 +7682,19 @@ function ListadoPagosDiarios({ usuario }) {
           for (const k in acc) empSem[k] = [...acc[k]].join(" / ");
         }
       } catch (e2) { console.error("empresa por semana:", e2); }
-      const empresaDe = (p) => (p.id_ruta != null && String(p.id_ruta) in empresaMotor) ? empresaMotor[String(p.id_ruta)] : empSem[semanaInventario(p.fecha) + "||" + normalizarPlaca(p.placa)] || empresaMap[normalizarPlaca(p.placa)] || "";
+      // Empresa del motor (misma fuente que Conciliación) para TODO el rango del
+      // Excel, de a 1.000 filas para no quedar corto.
+      const empMotorRango = {};
+      try {
+        for (let desdeFila = 0; ; desdeFila += 1000) {
+          const { data: tr, error: eTr } = await sb.from("tarifado_mx").select("id_ruta, empresa_nombre, tercero_id")
+            .gte("fecha", desde).lte("fecha", hasta).order("id_ruta").range(desdeFila, desdeFila + 999);
+          if (eTr) throw eTr;
+          for (const r of tr || []) empMotorRango[String(r.id_ruta)] = (r.tercero_id && r.empresa_nombre) ? r.empresa_nombre : "";
+          if (!tr || tr.length < 1000) break;
+        }
+      } catch (e3) { console.error("empresa del motor (Excel):", e3); }
+      const empresaDe = (p) => (p.id_ruta != null && String(p.id_ruta) in empMotorRango) ? empMotorRango[String(p.id_ruta)] : empSem[semanaInventario(p.fecha) + "||" + normalizarPlaca(p.placa)] || empresaMap[normalizarPlaca(p.placa)] || "";
       const headers = [
         "Fecha","Chofer","Patente","Empresa","Vehículo","Tipología","Tipo Ruta","SC","Zona","ID Ruta","Ciclo",
         "Km Pago (Real)","Km Planif.","Fuente KM","Envíos despachados","Envíos entregados","NS%","% Visitado Real","% No Visitado Real","No visitado %","Categoría NS",
