@@ -1049,21 +1049,18 @@ function CecosCentros({ quien }) {
   const [centros, setCentros] = useState(null);
   const [admin, setAdmin] = useState([]);
   const [chk, setChk] = useState({});
-  const [sd, setSd] = useState([]);
   const [f, setF] = useState({ nombre: "ML_", codigo: "" });
-  const [fsd, setFsd] = useState({ cecos_admin: "", ciclo: "PM1" });
   const [msg, setMsg] = useState("");
   const cargar = async () => {
-    const [c, a, sbt, tar, bono, seg, sdr] = await Promise.all([
+    const [c, a, sbt, tar, bono, seg] = await Promise.all([
       apiSuave("cecos?select=codigo,capturar,fuente&order=codigo", null),
       apiSuave("cecos_admin?select=nombre,codigo_meli,activo&order=nombre", []),
       apiSuave("supervisores_bt?select=nombre,scs_asignados,activo,es_prueba&activo=eq.true", []),
       apiSuave("tarifas?select=cecos_admin,servicio&activa=eq.true&limit=2000", []),
       apiSuave("bono_ns_tramos?select=cecos_admin&activo=eq.true&limit=2000", []),
       apiSuave("segmentaciones?select=nombre,cecos_admin&limit=2000", []),
-      apiSuave("reglas_same_day_cl?select=*&order=cecos_admin", []),
     ]);
-    setCentros(c); setAdmin(a || []); setSd(sdr || []);
+    setCentros(c); setAdmin(a || []);
     const m = {};
     (a || []).filter(x => /^ML_/.test(x.nombre)).forEach(x => {
       const n = x.nombre;
@@ -1099,12 +1096,6 @@ function CecosCentros({ quien }) {
       setMsg(`✓ ${nombre} (${codigo}) agregado: el VPS captura sus rutas desde la próxima vuelta. Completa lo que le falta en la tabla de abajo.`);
       setF({ nombre: "ML_", codigo: "" }); await cargar();
     } catch (e) { setMsg("No se pudo agregar: " + e.message); }
-  };
-  const guardarSd = async (cecos_admin, ciclo, activo) => {
-    setMsg("");
-    try { await rpc("fn_regla_same_day", { p_cecos: cecos_admin, p_ciclo: ciclo, p_activo: activo, p_por: quien });
-          setMsg(`✓ Same Day ${cecos_admin} · ${ciclo}: ${activo ? "activa" : "apagada"}`); setFsd({ cecos_admin: "", ciclo: "PM1" }); await cargar(); }
-    catch (e) { setMsg("No se pudo guardar: " + e.message); }
   };
   if (centros === null) return <div className="mt-card"><div className="mt-tit">CECO y centros MELI</div>
     <div className="mt-sub" style={{ color: AMBAR }}>No se pudo leer la tabla cecos: faltan los SQL de esta pasada.</div></div>;
@@ -1163,26 +1154,78 @@ function CecosCentros({ quien }) {
         </div>
       </div>
 
-      <div className="mt-card">
-        <div className="mt-tit">Regla de Same Day</div>
-        <div className="mt-sub">Una ruta de estos CECO con este ciclo de MELI se paga como servicio SAME DAY (con su tarifa del Tarifario), salvo que el supervisor haya confirmado otro tipo de ruta. Hoy: Melipilla, Salamanca y Pichilemu con ciclo PM1 (salen en la tarde con menos paradas).</div>
-        {sd.length > 0 && (
-          <table className="mt-tabla" style={{ maxWidth: 620, marginBottom: 10 }}>
-            <thead><tr><th>CECO</th><th>Ciclo MELI</th><th>Activa</th></tr></thead>
-            <tbody>{sd.map(x => (
-              <tr key={x.cecos_admin + x.ciclo} style={!x.activo ? { opacity: 0.5 } : undefined}>
-                <td style={{ fontWeight: 700 }}>{x.cecos_admin}</td><td style={{ fontFamily: "monospace" }}>{x.ciclo}</td>
-                <td><input type="checkbox" checked={!!x.activo} onChange={e => guardarSd(x.cecos_admin, x.ciclo, e.target.checked)} /></td>
-              </tr>))}</tbody>
-          </table>
-        )}
-        <div style={{ display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap" }}>
-          <label className="mt-lbl">CECO<select className="mt-in" value={fsd.cecos_admin} onChange={e => setFsd({ ...fsd, cecos_admin: e.target.value })}>
-            <option value="">Elige</option>{cecosML.map(n => <option key={n}>{n}</option>)}</select></label>
-          <label className="mt-lbl">Ciclo<input className="mt-in" value={fsd.ciclo} onChange={e => setFsd({ ...fsd, ciclo: e.target.value.toUpperCase() })} style={{ width: 80 }} /></label>
-          <button className="mt-btn pri" disabled={!fsd.cecos_admin || !fsd.ciclo} onClick={() => guardarSd(fsd.cecos_admin, fsd.ciclo, true)}>Agregar regla</button>
-        </div>
+      <SameDayXpt quien={quien} />
+    </div>
+  );
+}
+
+// ── Same Day por XPT ───────────────────────────────────────────────────────
+// Administración decide qué rutas son Same Day: marca combinaciones de XPT
+// (exchange point de MELI desde donde sale la ruta, ej. EIL1, ERM2) y ciclo.
+// Se muestran los XPT que aparecieron en los últimos 30 días con sus rutas por
+// ciclo, para decidir con datos. Lo marcado se paga como SAME DAY con su tarifa
+// del Tarifario (salvo que el supervisor haya confirmado otro tipo de ruta).
+function SameDayXpt({ quien }) {
+  const [datos, setDatos] = useState(null);
+  const [reglas, setReglas] = useState([]);
+  const [msg, setMsg] = useState("");
+  const cargar = async () => {
+    const [d, r] = await Promise.all([
+      apiSuave("vw_xpt_ciclos_cl?select=*&order=facility_id,ciclo", null),
+      apiSuave("reglas_same_day_xpt_cl?select=*&order=facility_id,ciclo", []),
+    ]);
+    setDatos(d); setReglas(r || []);
+  };
+  useEffect(() => { cargar(); }, []);
+  const activa = (f, c) => reglas.some(x => x.activo && x.facility_id === f && (x.ciclo === "*" || x.ciclo === c));
+  const todos = (f) => reglas.some(x => x.activo && x.facility_id === f && x.ciclo === "*");
+  const guardar = async (facility, ciclo, act) => {
+    setMsg("");
+    try { await rpc("fn_regla_same_day_xpt", { p_facility: facility, p_ciclo: ciclo, p_activo: act, p_por: quien });
+          setMsg(`✓ ${facility} · ${ciclo === "*" ? "todos los ciclos" : ciclo}: ${act ? "es Same Day" : "no es Same Day"}`); await cargar(); }
+    catch (e) { setMsg("No se pudo guardar: " + e.message); }
+  };
+  if (datos === null) return <div className="mt-card"><div className="mt-tit">Same Day</div>
+    <div className="mt-sub" style={{ color: AMBAR }}>Faltan los SQL de esta pasada (vw_xpt_ciclos_cl).</div></div>;
+  const xpts = [...new Set(datos.map(d => d.facility_id))];
+  return (
+    <div className="mt-card">
+      <div className="mt-tit">Same Day</div>
+      <div className="mt-sub">
+        Marca qué rutas son Same Day según el XPT (exchange point de MELI) desde donde salen y su ciclo. Lo marcado se paga
+        como servicio SAME DAY con su tarifa del Tarifario; lo demás sigue como UM. Abajo están los XPT de los últimos 30 días
+        con cuántas rutas tuvo cada ciclo, para decidir con datos.
       </div>
+      {msg && <div className="mt-msg" style={{ color: msg.startsWith("✓") ? VERDE : ROJO }}>{msg}</div>}
+      <table className="mt-tabla" style={{ maxWidth: 860 }}>
+        <thead><tr><th>XPT</th><th>CECO</th><th>Ciclo</th><th style={{ textAlign: "right" }}>Rutas (30 días)</th><th>¿Es Same Day?</th></tr></thead>
+        <tbody>
+          {xpts.map(f => {
+            const filas = datos.filter(d => d.facility_id === f);
+            return filas.map((d, i) => (
+              <tr key={f + (d.ciclo || "-")} style={{ borderTop: i === 0 ? "2px solid #e6e9ef" : undefined }}>
+                <td style={{ fontFamily: "monospace", fontWeight: 700 }}>{i === 0 ? f : ""}</td>
+                <td>{i === 0 ? (d.cecos_admin || <span style={{ color: AMBAR }}>sin CECO</span>) : ""}</td>
+                <td style={{ fontFamily: "monospace" }}>{d.ciclo || "sin ciclo"}</td>
+                <td style={{ textAlign: "right" }}>{Number(d.rutas || 0).toLocaleString("es-CL")}</td>
+                <td>
+                  {todos(f) ? <span style={{ color: VERDE, fontWeight: 700 }}>✓ (todos los ciclos)</span> : d.ciclo ? (
+                    <label style={{ display: "inline-flex", gap: 6, alignItems: "center", cursor: "pointer" }}>
+                      <input type="checkbox" checked={activa(f, d.ciclo)} onChange={e => guardar(f, d.ciclo, e.target.checked)} />
+                      {activa(f, d.ciclo) ? <b style={{ color: VERDE }}>Same Day</b> : <span style={{ color: "#64748b" }}>UM</span>}
+                    </label>
+                  ) : <span style={{ color: "#94a3b8" }}>—</span>}
+                  {i === 0 && (
+                    <label style={{ marginLeft: 14, fontSize: 11, color: "#64748b", cursor: "pointer" }}>
+                      <input type="checkbox" checked={todos(f)} onChange={e => guardar(f, "*", e.target.checked)} /> todos los ciclos
+                    </label>
+                  )}
+                </td>
+              </tr>
+            ));
+          })}
+        </tbody>
+      </table>
     </div>
   );
 }
