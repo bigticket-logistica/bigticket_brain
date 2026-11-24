@@ -2,12 +2,10 @@ import { useState } from "react";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CERTRONIC · CHILE — Aviso de actualización
-// Muestra un aviso cuando:
-//   1. La última corrida del pipeline tuvo errores o advertencias, o
-//   2. Los datos llevan más de HORAS_MAX_SIN_DATOS sin actualizarse, aunque
-//      no haya errores registrados (por ejemplo, si el cron dejó de correr).
-// Para cada paso que falló indica qué información queda afectada y el comando
-// exacto para reintentarlo en el servidor.
+// Usuarios no técnicos (analista): solo ven un aviso simple cuando los datos
+// llevan más de HORAS_MAX_SIN_DATOS sin actualizarse. Nada más.
+// Superadmin (tecnico = true): ve además las advertencias de cada corrida,
+// qué información queda afectada y el comando para reintentar en el servidor.
 // ═══════════════════════════════════════════════════════════════════════════
 
 const SERVIDOR = "root@162.243.90.161";
@@ -121,7 +119,7 @@ function BloqueComando({ lineas }) {
   );
 }
 
-export function AvisoActualizacion({ corridas, onOcultar }) {
+export function AvisoActualizacion({ corridas, tecnico = false, onOcultar }) {
   if (!corridas || corridas.length === 0) return null;
 
   const ultima = corridas[0];
@@ -132,6 +130,29 @@ export function AvisoActualizacion({ corridas, onOcultar }) {
   const ultimaFallo = !!ultima.tiene_errores || pasosConProblema.length > 0;
 
   if (!datosViejos && !ultimaFallo) return null;
+
+  // Vista para el analista: solo importa si los datos están viejos.
+  if (!tecnico) {
+    if (!datosViejos) return null;
+    return (
+      <div style={{
+        background: "#fef2f2", border: "1px solid #fca5a5", borderLeft: "4px solid #dc2626",
+        borderRadius: 8, padding: "10px 16px", marginBottom: 14, color: "#7f1d1d", fontSize: 12.5,
+        display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12,
+      }}>
+        <div>
+          <strong>{conDatos
+            ? `Los datos de Certronic no se actualizan desde el ${fmtFecha(conDatos.fecha_run)} (${hace(horasSinDatos)}).`
+            : "Los datos de Certronic no se han podido actualizar."}</strong>{" "}
+          Lo que ves puede no reflejar lo último cargado en Certronic.
+        </div>
+        <button onClick={onOcultar} style={{
+          padding: "4px 10px", border: "1px solid #fca5a5", background: "#fff", borderRadius: 6,
+          fontSize: 11, color: "#991b1b", cursor: "pointer", whiteSpace: "nowrap",
+        }}>Ocultar</button>
+      </div>
+    );
+  }
 
   const grave = datosViejos;
   const color = grave

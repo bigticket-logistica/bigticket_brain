@@ -24,7 +24,9 @@ import { DashboardVehiculos } from "./Vehiculos";
 //   - certronic_pipeline_runs          (historial de corridas del pipeline)
 //   - certronic_overrides_analista     (correcciones manuales del analista)
 // ═══════════════════════════════════════════════════════════════════════════
-function ModuloPagos() {
+function ModuloPagos({ usuario }) {
+  // El detalle técnico de las corridas (pasos y comandos) solo lo ve superadmin.
+  const esTecnico = usuario?.rol === "superadmin";
   const [datos, setDatos] = useState({ pc: [], ryc: [], sub: [] });
   const [loading, setLoading] = useState(true);
   const [periodo, setPeriodo] = useState(""); // YYYY-MM
@@ -702,7 +704,7 @@ function ModuloPagos() {
 
       {/* Aviso de actualización de Certronic */}
       {!avisoOculto && (
-        <AvisoActualizacion corridas={corridas} onOcultar={() => setAvisoOculto(true)} />
+        <AvisoActualizacion corridas={corridas} tecnico={esTecnico} onOcultar={() => setAvisoOculto(true)} />
       )}
 
       {/* TABS de vista principal */}
