@@ -1,6 +1,21 @@
 import { useState, useEffect, useRef, Fragment } from "react";
 import { sb, BIGGY_IMG } from "./shared";
 
+// ── Lectura completa por páginas (24-nov-2026) ──────────────────────────────
+// La base entrega como MÁXIMO 1.000 filas por consulta, aunque se pida más con
+// .limit(). Esta función pide de a 1.000 hasta traer todo. Recibe una función
+// que arma la consulta (sin .limit ni .range) y devuelve { data, error }.
+async function traerTodo(armar, tam = 1000) {
+  const out = [];
+  for (let i = 0; ; i += tam) {
+    const { data, error } = await armar().range(i, i + tam - 1);
+    if (error) return { data: out.length ? out : null, error };
+    out.push(...(data || []));
+    if (!data || data.length < tam) return { data: out, error: null };
+  }
+}
+
+
 // Todas las fechas del módulo se muestran en HORA DE MÉXICO, sin importar desde
 // dónde se abra el Brain. Sin timeZone, el navegador usa su zona local y el
 // mismo registro se vería con dos horas de diferencia entre Chile y México.
@@ -6383,12 +6398,12 @@ function TableroControl() {
     //  · sla_reactivaciones      → botón "🔄 Reactivar plazo" (el habitual)
     //  · tareas_reactivaciones   → repetir entrevista/llamada ya ejecutada
     const [{ data: tareas }, { data: reaSla }, { data: reaTar }] = await Promise.all([
-      sb.from("tareas_supervisor").select("*")
+      traerTodo(() => sb.from("tareas_supervisor").select("*")
         .in("tipo_tarea", ["llamada_prospecto", "entrevista_prospecto"])
         .gte("created_at", desdeTs).lte("created_at", hastaTs)
-        .order("created_at", { ascending: false }).limit(3000),
-      sb.from("sla_reactivaciones").select("*").limit(5000),
-      sb.from("tareas_reactivaciones").select("*").limit(5000),
+        .order("created_at", { ascending: false })),
+      traerTodo(() => sb.from("sla_reactivaciones").select("*")),
+      traerTodo(() => sb.from("tareas_reactivaciones").select("*")),
     ]);
     // Los nombres de las llaves varían entre las dos tablas, así que se
     // recogen todos los valores que puedan ser el id de la tarea.
@@ -6798,11 +6813,11 @@ function Trazabilidad() {
 
   useEffect(() => { (async () => {
     const [c, m] = await Promise.all([
-      sb.from("certificaciones_mx")
+      traerTodo(() => sb.from("certificaciones_mx")
         .select("id, nombre, svc, etapa_kanban, estado, created_at, updated_at")
-        .order("created_at", { ascending: false }).limit(2000),
-      sb.from("movimientos_etapa").select("*").eq("tabla", "certificaciones_mx")
-        .order("created_at", { ascending: true }).limit(20000),
+        .order("created_at", { ascending: false })),
+      traerTodo(() => sb.from("movimientos_etapa").select("*").eq("tabla", "certificaciones_mx")
+        .order("created_at", { ascending: true })),
     ]);
     const porTarjeta = new Map();
     for (const mv of (m.data || [])) {
@@ -7509,11 +7524,11 @@ function InventarioFlota() {
 
   const cargar = async () => {
     const [{ data: inv }, { data: cg }, { data: marcas }] = await Promise.all([
-      sb.from("vw_inventario_flota").select("*").order("placa").limit(3000),
+      traerTodo(() => sb.from("vw_inventario_flota").select("*").order("placa")),
       sb.from("inventario_flota_cargas").select("*").order("cargado_at", { ascending: false }).limit(5),
       // cargado_at se lee de la tabla base: todas las placas de una misma
       // subida llevan exactamente la misma marca de tiempo.
-      sb.from("inventario_flota").select("placa, cargado_at").limit(3000),
+      traerTodo(() => sb.from("inventario_flota").select("placa, cargado_at").order("placa")),
     ]);
     const ts = {};
     for (const m of marcas || []) ts[m.placa] = m.cargado_at ? new Date(m.cargado_at).getTime() : 0;
