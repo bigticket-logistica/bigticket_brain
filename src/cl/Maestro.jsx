@@ -1809,7 +1809,8 @@ function ModuloMaestroCL({ usuario } = {}) {
     const rec = recMap[String(r.id_viaje)];
     // Estado interno de una línea API: primero lo que digan sus hitos; si no tiene, lo que diga el pago
     const ep = estPago[String(r.id_viaje)];
-    const PEND = { "sin tarifa": "Sin tarifa en el Tarifario", "sin resolver": "Sin CECO: revisar zona", "tipo por confirmar": "Tipo de ruta por confirmar" };
+    const PEND = { "sin tarifa": "Sin tarifa en el Tarifario", "sin resolver": "Sin CECO: revisar zona", "tipo por confirmar": "Tipo de ruta por confirmar",
+                   "falta consignar": "Ruta no planificada: falta comentario y monto en la bitácora" };
     const estInt = !hs.length
         ? (ep === "tarificacion manual" ? ["tarificacion_manual", "Pago especial"]
           : PEND[ep] ? ["por_revisar", PEND[ep]]
@@ -3288,6 +3289,9 @@ function ModuloMaestroCL({ usuario } = {}) {
                                       : r.estado_pago === "tipo por confirmar"
                                         ? <span title={r.alerta_pago || "Ruta no planificada: confirma si fue Spot o Ambulancia."}>
                                             <Etiqueta texto="POR CONFIRMAR TIPO" color={AMBAR_} fondo="#fdf6e3" /></span>
+                                      : r.estado_pago === "falta consignar"
+                                        ? <span title={r.alerta_pago || "Ruta no planificada (ambulancia): el supervisor debe consignar comentario y monto en la bitácora."}>
+                                            <Etiqueta texto="FALTA CONSIGNAR" color="#7A4A00" fondo="#FFF1DB" /></span>
                                         : <span title="Falta la zona: corrígelo con el botón ✎ de esta fila, o crea la zona en la pestaña Zonas de Pago">
                                             <Etiqueta texto="SIN RESOLVER" color="#b42318" fondo="#fdecea" /></span>}
                                     {r.zona_manual && <span style={{ marginLeft: 4 }} title={r.motivo_manual || "Corrección manual"}>
