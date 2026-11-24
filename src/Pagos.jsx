@@ -7244,8 +7244,14 @@ function ListadoPagosDiarios({ usuario }) {
   const [empresaMapSem, setEmpresaMapSem] = useState({}); // placa normalizada -> empresa(s) de la semana del día visible
   const [reglasAlerta, setReglasAlerta] = useState([]); // reglas configurables de alerta
   useEffect(() => { sb.from("config_alertas_pago").select("*").order("orden").then(({ data }) => setReglasAlerta(data || [])).catch(() => {}); }, []);
-  // Empresa de una fila: asignación de la semana operada; fallback: mapa global (más reciente)
+  // Empresa de una fila — MISMA FUENTE que Conciliación (24-nov-2026): la que
+  // guardó el motor con la regla única (tarifado_mx.empresa_nombre). El
+  // inventario semanal queda solo de respaldo para rutas aún sin guardar.
+  const [empresaMotor, setEmpresaMotor] = useState({}); // id_ruta -> empresa guardada por el motor
   const empresaDeFila = (p) => {
+    const id = p && p.id_ruta != null ? String(p.id_ruta) : "";
+    // Ruta ya guardada: manda lo del motor, aunque sea "sin empresa" (igual que Conciliación).
+    if (id && id in empresaMotor) return empresaMotor[id];
     const k = normalizarPlaca(p && p.placa);
     return empresaMapSem[k] || empresaMap[k] || "";
   };
@@ -7312,6 +7318,22 @@ function ListadoPagosDiarios({ usuario }) {
       cargarPublicaciones();
     } catch (e) { alert("Error reanudando: " + (e.message || e)); }
   };
+
+  // Empresa guardada por el motor para las rutas cargadas en el listado.
+  useEffect(() => {
+    const ids = [...new Set((pagos || []).map(p => p && p.id_ruta != null ? String(p.id_ruta) : "").filter(Boolean))];
+    if (!ids.length) { setEmpresaMotor({}); return; }
+    let cancel = false;
+    (async () => {
+      const m = {};
+      for (let i = 0; i < ids.length; i += 300) {
+        const { data } = await sb.from("tarifado_mx").select("id_ruta, empresa_nombre, tercero_id").in("id_ruta", ids.slice(i, i + 300));
+        for (const r of data || []) m[String(r.id_ruta)] = (r.tercero_id && r.empresa_nombre) ? r.empresa_nombre : "";
+      }
+      if (!cancel) setEmpresaMotor(m);
+    })().catch(e => console.error("empresa del motor:", e));
+    return () => { cancel = true; };
+  }, [pagos]);
 
   // Carga el mapa placa->empresa desde flota_terceros_mx (semana mas reciente gana)
   useEffect(() => {
@@ -7551,7 +7573,7 @@ function ListadoPagosDiarios({ usuario }) {
     });
 
     return res;
-  }, [pagos, busqueda, filtroEstado, causaFalta, orderBy, orderDir, reglasAlerta, empresaMap, empresaMapSem]);
+  }, [pagos, busqueda, filtroEstado, causaFalta, orderBy, orderDir, reglasAlerta, empresaMap, empresaMapSem, empresaMotor]);
 
   // Totales
   const totales = useMemo(() => {
@@ -7660,7 +7682,7 @@ function ListadoPagosDiarios({ usuario }) {
           for (const k in acc) empSem[k] = [...acc[k]].join(" / ");
         }
       } catch (e2) { console.error("empresa por semana:", e2); }
-      const empresaDe = (p) => empSem[semanaInventario(p.fecha) + "||" + normalizarPlaca(p.placa)] || empresaMap[normalizarPlaca(p.placa)] || "";
+      const empresaDe = (p) => (p.id_ruta != null && String(p.id_ruta) in empresaMotor) ? empresaMotor[String(p.id_ruta)] : empSem[semanaInventario(p.fecha) + "||" + normalizarPlaca(p.placa)] || empresaMap[normalizarPlaca(p.placa)] || "";
       const headers = [
         "Fecha","Chofer","Patente","Empresa","Vehículo","Tipología","Tipo Ruta","SC","Zona","ID Ruta","Ciclo",
         "Km Pago (Real)","Km Planif.","Fuente KM","Envíos despachados","Envíos entregados","NS%","% Visitado Real","% No Visitado Real","No visitado %","Categoría NS",
