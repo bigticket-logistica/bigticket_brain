@@ -1160,72 +1160,80 @@ function CecosCentros({ quien }) {
 }
 
 // ── Same Day por XPT ───────────────────────────────────────────────────────
-// Administración decide qué rutas son Same Day: marca combinaciones de XPT
-// (exchange point de MELI desde donde sale la ruta, ej. EIL1, ERM2) y ciclo.
-// Se muestran los XPT que aparecieron en los últimos 30 días con sus rutas por
-// ciclo, para decidir con datos. Lo marcado se paga como SAME DAY con su tarifa
-// del Tarifario (salvo que el supervisor haya confirmado otro tipo de ruta).
+// Administración decide qué rutas son Same Day. Cada XPT (punto de MELI desde
+// donde salen las rutas de un CECO) muestra sus ciclos con cuántas rutas tuvo en
+// los últimos 30 días; se toca un ciclo para pasarlo de UM a Same Day.
 function SameDayXpt({ quien }) {
   const [datos, setDatos] = useState(null);
   const [reglas, setReglas] = useState([]);
   const [msg, setMsg] = useState("");
+  const [busy, setBusy] = useState(null);
   const cargar = async () => {
     const [d, r] = await Promise.all([
       apiSuave("vw_xpt_ciclos_cl?select=*&order=facility_id,ciclo", null),
-      apiSuave("reglas_same_day_xpt_cl?select=*&order=facility_id,ciclo", []),
+      apiSuave("reglas_same_day_xpt_cl?select=*&activo=eq.true", []),
     ]);
     setDatos(d); setReglas(r || []);
   };
   useEffect(() => { cargar(); }, []);
-  const activa = (f, c) => reglas.some(x => x.activo && x.facility_id === f && (x.ciclo === "*" || x.ciclo === c));
-  const todos = (f) => reglas.some(x => x.activo && x.facility_id === f && x.ciclo === "*");
-  const guardar = async (facility, ciclo, act) => {
-    setMsg("");
-    try { await rpc("fn_regla_same_day_xpt", { p_facility: facility, p_ciclo: ciclo, p_activo: act, p_por: quien });
-          setMsg(`✓ ${facility} · ${ciclo === "*" ? "todos los ciclos" : ciclo}: ${act ? "es Same Day" : "no es Same Day"}`); await cargar(); }
-    catch (e) { setMsg("No se pudo guardar: " + e.message); }
+  const esSD = (f, c) => reglas.some(x => x.facility_id === f && (x.ciclo === "*" || x.ciclo === c));
+  const alternar = async (f, c) => {
+    const act = !esSD(f, c);
+    setBusy(f + c); setMsg("");
+    try { await rpc("fn_regla_same_day_xpt", { p_facility: f, p_ciclo: c, p_activo: act, p_por: quien });
+          setMsg(`✓ ${f} ${c}: ${act ? "se paga como Same Day" : "vuelve a pagarse como UM"}`); await cargar(); }
+    catch (e) { setMsg("No se pudo guardar: " + e.message); } finally { setBusy(null); }
   };
   if (datos === null) return <div className="mt-card"><div className="mt-tit">Same Day</div>
     <div className="mt-sub" style={{ color: AMBAR }}>Faltan los SQL de esta pasada (vw_xpt_ciclos_cl).</div></div>;
-  const xpts = [...new Set(datos.map(d => d.facility_id))];
+
+  const xpts = [...new Set(datos.map(d => d.facility_id))].map(f => {
+    const filas = datos.filter(d => d.facility_id === f);
+    return { f, ceco: filas[0]?.cecos_admin, ciclos: filas.filter(d => d.ciclo), sinCiclo: filas.filter(d => !d.ciclo).reduce((a, d) => a + Number(d.rutas || 0), 0) };
+  });
+  const marcados = xpts.flatMap(x => x.ciclos.filter(c => esSD(x.f, c.ciclo)).map(c => `${x.ceco || x.f} (${x.f} ${c.ciclo})`));
+
   return (
     <div className="mt-card">
       <div className="mt-tit">Same Day</div>
       <div className="mt-sub">
-        Marca qué rutas son Same Day según el XPT (exchange point de MELI) desde donde salen y su ciclo. Lo marcado se paga
-        como servicio SAME DAY con su tarifa del Tarifario; lo demás sigue como UM. Abajo están los XPT de los últimos 30 días
-        con cuántas rutas tuvo cada ciclo, para decidir con datos.
+        Las rutas de MELI salen de un <b>XPT</b> (punto de salida de cada CECO) y en un <b>ciclo</b>: AM1 es la mañana,
+        PM1 y PM2 la tarde. Toca un ciclo para decidir cómo se paga: <b>UM</b> (por entregado, lo normal) o <b>Same Day</b>
+        (monto fijo por ruta, con la tarifa SAME DAY del Tarifario). El número es cuántas rutas tuvo ese ciclo en los últimos 30 días.
+      </div>
+      <div style={{ background: "#f6f8fb", borderRadius: 8, padding: "8px 12px", fontSize: 12.5, margin: "4px 0 12px" }}>
+        <b style={{ color: NAVY }}>Hoy se pagan como Same Day:</b>{" "}
+        {marcados.length ? marcados.join(" · ") : <span style={{ color: "#64748b" }}>ninguno (todas las rutas se pagan como UM)</span>}
       </div>
       {msg && <div className="mt-msg" style={{ color: msg.startsWith("✓") ? VERDE : ROJO }}>{msg}</div>}
-      <table className="mt-tabla" style={{ maxWidth: 860 }}>
-        <thead><tr><th>XPT</th><th>CECO</th><th>Ciclo</th><th style={{ textAlign: "right" }}>Rutas (30 días)</th><th>¿Es Same Day?</th></tr></thead>
-        <tbody>
-          {xpts.map(f => {
-            const filas = datos.filter(d => d.facility_id === f);
-            return filas.map((d, i) => (
-              <tr key={f + (d.ciclo || "-")} style={{ borderTop: i === 0 ? "2px solid #e6e9ef" : undefined }}>
-                <td style={{ fontFamily: "monospace", fontWeight: 700 }}>{i === 0 ? f : ""}</td>
-                <td>{i === 0 ? (d.cecos_admin || <span style={{ color: AMBAR }}>sin CECO</span>) : ""}</td>
-                <td style={{ fontFamily: "monospace" }}>{d.ciclo || "sin ciclo"}</td>
-                <td style={{ textAlign: "right" }}>{Number(d.rutas || 0).toLocaleString("es-CL")}</td>
-                <td>
-                  {todos(f) ? <span style={{ color: VERDE, fontWeight: 700 }}>✓ (todos los ciclos)</span> : d.ciclo ? (
-                    <label style={{ display: "inline-flex", gap: 6, alignItems: "center", cursor: "pointer" }}>
-                      <input type="checkbox" checked={activa(f, d.ciclo)} onChange={e => guardar(f, d.ciclo, e.target.checked)} />
-                      {activa(f, d.ciclo) ? <b style={{ color: VERDE }}>Same Day</b> : <span style={{ color: "#64748b" }}>UM</span>}
-                    </label>
-                  ) : <span style={{ color: "#94a3b8" }}>—</span>}
-                  {i === 0 && (
-                    <label style={{ marginLeft: 14, fontSize: 11, color: "#64748b", cursor: "pointer" }}>
-                      <input type="checkbox" checked={todos(f)} onChange={e => guardar(f, "*", e.target.checked)} /> todos los ciclos
-                    </label>
-                  )}
-                </td>
-              </tr>
-            ));
-          })}
-        </tbody>
-      </table>
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {xpts.map(x => (
+          <div key={x.f} style={{ display: "grid", gridTemplateColumns: "190px 1fr", gap: 12, alignItems: "center",
+                                  border: "1px solid #e6e9ef", borderRadius: 10, padding: "10px 12px" }}>
+            <div>
+              <div style={{ fontWeight: 800, color: NAVY, fontSize: 13 }}>{x.ceco || "Sin CECO"}</div>
+              <div style={{ fontSize: 11, color: "#64748b" }}>XPT {x.f}</div>
+            </div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+              {x.ciclos.map(c => {
+                const sd = esSD(x.f, c.ciclo);
+                return (
+                  <button key={c.ciclo} disabled={busy === x.f + c.ciclo} onClick={() => alternar(x.f, c.ciclo)}
+                          title={sd ? "Se paga como Same Day. Toca para volver a UM." : "Se paga como UM. Toca para pagarlo como Same Day."}
+                          style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", minWidth: 120, cursor: "pointer",
+                                   border: `1.5px solid ${sd ? "#7c3aed" : "#dfe4ec"}`, background: sd ? "#f3e8ff" : "#fff",
+                                   borderRadius: 10, padding: "6px 10px", fontFamily: "inherit", textAlign: "left" }}>
+                    <span style={{ fontSize: 12.5, fontWeight: 800, color: "#1f2937" }}>{c.ciclo}
+                      <span style={{ fontWeight: 400, color: "#64748b" }}> · {Number(c.rutas).toLocaleString("es-CL")} rutas</span></span>
+                    <span style={{ fontSize: 11.5, fontWeight: 700, color: sd ? "#7c3aed" : "#64748b" }}>{sd ? "✓ Same Day" : "UM"}</span>
+                  </button>
+                );
+              })}
+              {x.sinCiclo > 0 && <span style={{ fontSize: 11, color: "#94a3b8" }}>+ {x.sinCiclo} rutas sin ciclo (se pagan como UM)</span>}
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
