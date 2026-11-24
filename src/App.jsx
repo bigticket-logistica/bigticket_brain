@@ -16,7 +16,7 @@ import { descargarExcelMeli, descargarExcelMultihoja } from "./shared";
 import ModuloPagosMadre from "./Pagos";
 import ModuloContabilidad from "./Contabilidad";
 import Salud from "./Salud";
-import ModuloCertificacionesCL from "./cl/Certificaciones";
+import ModuloCertificacionesCL from "./cl/CertificacionesCL";
 import ModuloMaestroCL from "./cl/Maestro";
 import ModuloGpsSegurosCL from "./cl/GpsSeguros";
 import ModuloPnrCL from "./cl/PNR";
@@ -1544,7 +1544,7 @@ function ModuloConfigPagos() {
 
 // ─── Certronic · Chile ───────────────────────────────────────────────────────
 // El módulo de certificación documental de Chile (Certronic) vive ahora en
-// cl/certronic/ y lo carga directamente cl/Certificaciones.jsx.
+// cl/certronic/ y lo carga directamente cl/CertificacionesCL.jsx.
 
 // Tarjeta KPI (la usan otros módulos del Brain)
 function KPI({ label, valor, sub, color = "#002E5D" }) {
