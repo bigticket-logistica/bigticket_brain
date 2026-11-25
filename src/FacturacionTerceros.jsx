@@ -18,6 +18,92 @@ import { avisarPortal } from "./avisarPortal";
 const money = (n) => "$" + Number(n || 0).toLocaleString("es-MX", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const fecha = (s) => s ? new Date(s).toLocaleDateString("es-MX", { day: "2-digit", month: "short", year: "2-digit" }) : "—";
 const BRAIN_API = "/api/reportes/validar-cfdi";
+
+// ── Visor de CFDI (25-nov-2026) ─────────────────────────────────────────────
+// La factura del tercero es un XML del SAT. Abierta tal cual, el navegador
+// muestra el texto crudo. Aquí se lee el XML y se arma la representación
+// impresa: emisor, receptor, conceptos, impuestos, totales y timbre fiscal.
+const CAT_FORMA_PAGO = { "01": "Efectivo", "02": "Cheque nominativo", "03": "Transferencia electrónica", "04": "Tarjeta de crédito", "28": "Tarjeta de débito", "99": "Por definir" };
+const CAT_METODO = { PUE: "Pago en una sola exhibición", PPD: "Pago en parcialidades o diferido" };
+const CAT_TIPO = { I: "Ingreso", E: "Egreso", T: "Traslado", P: "Pago", N: "Nómina" };
+const CAT_USO = { G01: "Adquisición de mercancías", G03: "Gastos en general", I08: "Otra maquinaria y equipo", S01: "Sin efectos fiscales", CP01: "Pagos" };
+const CAT_REGIMEN = { "601": "General de Ley Personas Morales", "603": "Personas Morales con Fines no Lucrativos", "605": "Sueldos y Salarios", "606": "Arrendamiento", "612": "Personas Físicas con Actividades Empresariales y Profesionales", "616": "Sin obligaciones fiscales", "621": "Incorporación Fiscal", "625": "Plataformas Tecnológicas", "626": "Régimen Simplificado de Confianza" };
+const CAT_IMPUESTO = { "001": "ISR", "002": "IVA", "003": "IEPS" };
+
+function esc(s) { return String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+function con(cat, v) { return v ? `${esc(v)}${cat[v] ? " · " + esc(cat[v]) : ""}` : "—"; }
+
+function htmlDeCfdi(xmlTexto, nombreArchivo) {
+  const doc = new DOMParser().parseFromString(xmlTexto, "application/xml");
+  if (doc.getElementsByTagName("parsererror").length) return null;
+  const uno = (local) => { const l = doc.getElementsByTagNameNS("*", local); return l.length ? l[0] : null; };
+  const todos = (raiz, local) => raiz ? Array.from(raiz.getElementsByTagNameNS("*", local)) : [];
+  const a = (el, n) => (el && el.getAttribute(n)) || "";
+  const c = uno("Comprobante"); if (!c) return null;
+  const em = uno("Emisor"), re = uno("Receptor"), tfd = uno("TimbreFiscalDigital");
+  const conceptosRaiz = uno("Conceptos");
+  const conceptos = todos(conceptosRaiz, "Concepto");
+  const mon = (v) => v === "" ? "—" : "$" + Number(v).toLocaleString("es-MX", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  // Impuestos del comprobante: el nodo Impuestos que es hijo directo del Comprobante
+  const impC = Array.from(c.children).find(n => n.localName === "Impuestos");
+  const traslados = impC ? Array.from(impC.getElementsByTagNameNS("*", "Traslado")) : [];
+  const retenciones = impC ? Array.from(impC.getElementsByTagNameNS("*", "Retencion")) : [];
+  const filasConceptos = conceptos.map(k => `
+      <tr><td>${esc(a(k, "ClaveProdServ"))}</td><td class="r">${esc(a(k, "Cantidad"))}</td>
+      <td>${esc(a(k, "ClaveUnidad"))}${a(k, "Unidad") ? " · " + esc(a(k, "Unidad")) : ""}</td>
+      <td>${esc(a(k, "Descripcion"))}</td><td class="r">${mon(a(k, "ValorUnitario"))}</td>
+      <td class="r">${a(k, "Descuento") ? mon(a(k, "Descuento")) : "—"}</td><td class="r">${mon(a(k, "Importe"))}</td></tr>`).join("");
+  const filasImp = [
+    ...traslados.map(x => `<tr><td>${esc(CAT_IMPUESTO[a(x, "Impuesto")] || a(x, "Impuesto"))} trasladado ${a(x, "TasaOCuota") ? "(" + (Number(a(x, "TasaOCuota")) * 100).toFixed(2) + "%)" : ""}</td><td class="r">${mon(a(x, "Importe"))}</td></tr>`),
+    ...retenciones.map(x => `<tr><td>${esc(CAT_IMPUESTO[a(x, "Impuesto")] || a(x, "Impuesto"))} retenido</td><td class="r">−${mon(a(x, "Importe"))}</td></tr>`),
+  ].join("");
+  const blobXml = URL.createObjectURL(new Blob([xmlTexto], { type: "application/xml" }));
+  return `<!doctype html><html lang="es"><head><meta charset="utf-8"><title>CFDI ${esc(a(c, "Serie"))}${esc(a(c, "Folio"))} · ${esc(a(em, "Nombre"))}</title>
+<style>
+  body{font-family:'Open Sans',Arial,sans-serif;color:#1e293b;margin:0;background:#f1f5f9}
+  .hoja{max-width:900px;margin:20px auto;background:#fff;padding:28px 32px;border:1px solid #e2e8f0;border-radius:8px}
+  h1{font-size:18px;margin:0;color:#002E5D} .sub{color:#64748b;font-size:12px}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:16px 0}
+  .caja{border:1px solid #e2e8f0;border-radius:6px;padding:10px 12px;font-size:12px;line-height:1.6}
+  .caja b{display:block;font-size:10.5px;color:#64748b;text-transform:uppercase;letter-spacing:.4px;margin-bottom:2px}
+  table{width:100%;border-collapse:collapse;font-size:12px;margin-top:6px}
+  th{background:#f8fafc;color:#64748b;font-size:10.5px;text-transform:uppercase;text-align:left;padding:7px 8px}
+  td{padding:7px 8px;border-top:1px solid #f1f5f9;vertical-align:top} .r{text-align:right;white-space:nowrap}
+  .tot{margin-left:auto;width:320px;margin-top:10px} .tot td{border:none;padding:4px 8px}
+  .total td{font-size:15px;font-weight:800;color:#002E5D;border-top:2px solid #002E5D}
+  .timbre{font-size:10.5px;color:#475569;word-break:break-all;margin-top:18px;border-top:1px dashed #cbd5e1;padding-top:10px;line-height:1.5}
+  .barra{max-width:900px;margin:12px auto 0;display:flex;gap:8px;justify-content:flex-end}
+  .barra a,.barra button{font-size:12px;padding:6px 12px;border-radius:6px;border:1px solid #002E5D;background:#fff;color:#002E5D;cursor:pointer;text-decoration:none}
+  @media print{.barra{display:none} body{background:#fff} .hoja{border:none;margin:0}}
+</style></head><body>
+<div class="barra"><button onclick="window.print()">Imprimir / guardar PDF</button><a href="${blobXml}" download="${esc(nombreArchivo || "factura.xml")}">Descargar XML</a></div>
+<div class="hoja">
+  <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start">
+    <div><h1>${esc(a(em, "Nombre")) || "Emisor"}</h1><div class="sub">RFC ${esc(a(em, "Rfc"))} · ${con(CAT_REGIMEN, a(em, "RegimenFiscal"))}</div></div>
+    <div style="text-align:right"><div style="font-size:12px;color:#64748b">Factura ${con(CAT_TIPO, a(c, "TipoDeComprobante"))}</div>
+      <div style="font-size:20px;font-weight:800;color:#FF6600">${esc(a(c, "Serie"))} ${esc(a(c, "Folio")) || ""}</div>
+      <div class="sub">${esc(a(c, "Fecha")).replace("T", " ")}</div></div>
+  </div>
+  <div class="grid">
+    <div class="caja"><b>Receptor</b>${esc(a(re, "Nombre"))}<br>RFC ${esc(a(re, "Rfc"))}<br>Uso CFDI: ${con(CAT_USO, a(re, "UsoCFDI"))}<br>Régimen: ${con(CAT_REGIMEN, a(re, "RegimenFiscalReceptor"))}<br>Domicilio fiscal (CP): ${esc(a(re, "DomicilioFiscalReceptor")) || "—"}</div>
+    <div class="caja"><b>Pago</b>Método: ${con(CAT_METODO, a(c, "MetodoPago"))}<br>Forma: ${con(CAT_FORMA_PAGO, a(c, "FormaPago"))}<br>Moneda: ${esc(a(c, "Moneda"))}${a(c, "TipoCambio") ? " · TC " + esc(a(c, "TipoCambio")) : ""}<br>Lugar de expedición (CP): ${esc(a(c, "LugarExpedicion"))}<br>Versión CFDI: ${esc(a(c, "Version"))}</div>
+  </div>
+  <table><thead><tr><th>Clave SAT</th><th class="r">Cant.</th><th>Unidad</th><th>Descripción</th><th class="r">Valor unitario</th><th class="r">Descuento</th><th class="r">Importe</th></tr></thead><tbody>${filasConceptos || '<tr><td colspan="7">Sin conceptos</td></tr>'}</tbody></table>
+  <table class="tot"><tbody>
+    <tr><td>Subtotal</td><td class="r">${mon(a(c, "SubTotal"))}</td></tr>
+    ${a(c, "Descuento") ? `<tr><td>Descuento</td><td class="r">−${mon(a(c, "Descuento"))}</td></tr>` : ""}
+    ${filasImp}
+    <tr class="total"><td>Total</td><td class="r">${mon(a(c, "Total"))}</td></tr>
+  </tbody></table>
+  <div class="timbre">
+    <b>Folio fiscal (UUID):</b> ${esc(a(tfd, "UUID")) || "— sin timbre —"}<br>
+    <b>Fecha de timbrado:</b> ${esc(a(tfd, "FechaTimbrado")).replace("T", " ") || "—"} · <b>Certificado del SAT:</b> ${esc(a(tfd, "NoCertificadoSAT")) || "—"} · <b>Certificado del emisor:</b> ${esc(a(c, "NoCertificado"))}<br>
+    <b>PAC:</b> ${esc(a(tfd, "RfcProvCertif")) || "—"}<br>
+    <b>Sello del SAT:</b> ${esc(a(tfd, "SelloSAT")).slice(0, 120)}…
+  </div>
+</div></body></html>`;
+}
+
 // Un solo webhook para los correos de esta pestaña (rechazo y pago): n8n solo
 // recibe destinatarios, asunto y cuerpo, y los manda por Brevo.
 const WEBHOOK_CORREO = "https://bigticket2026.app.n8n.cloud/webhook/facturacion-terceros-mx";
@@ -309,6 +395,19 @@ export default function FacturacionTerceros({ usuario }) {
   // (por eso se veía el código). Se descarga y se abre como página. La ventana
   // se abre antes de esperar la descarga para que el navegador no la bloquee.
   const abrir = async (path) => {
+    // Factura en XML (CFDI): se lee y se muestra como documento fiscal.
+    if (/\.xml$/i.test(path || "")) {
+      const ventana = window.open("", "_blank");
+      const { data: blob, error } = await sb.storage.from("proceso_certificacion_bt").download(path);
+      if (error || !blob) { if (ventana) ventana.close(); setMsg({ ok: false, txt: "No se pudo abrir la factura." }); return; }
+      const xml = await blob.text();
+      const html = htmlDeCfdi(xml, String(path).split("/").pop());
+      const url = URL.createObjectURL(html
+        ? new Blob([html], { type: "text/html;charset=utf-8" })
+        : new Blob([xml], { type: "text/plain;charset=utf-8" }));  // si no es un CFDI válido, se muestra tal cual
+      if (ventana) ventana.location.href = url; else window.open(url, "_blank");
+      return;
+    }
     if (/\.html?$/i.test(path || "")) {
       const ventana = window.open("", "_blank");
       const { data: blob, error } = await sb.storage.from("proceso_certificacion_bt").download(path);
