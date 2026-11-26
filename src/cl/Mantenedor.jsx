@@ -86,7 +86,7 @@ const CSS = `
 .mj-chip:hover{border-color:${NAVY};color:${NAVY};}
 `;
 
-const MAESTRO_MANT = [["glosario", "📖 Glosario del Maestro"], ["cecos", "🏢 CECO y centros MELI"], ["reemplazos", "↺ Reemplazos"], ["supervisores", "👤 Supervisores y CECO"], ["lideres", "👥 Líderes y supervisores"], ["colectas", "📦 Centros de colecta"],
+const MAESTRO_MANT = [["glosario", "📖 Glosario del Maestro"], ["cecos", "🏢 CECO y centros MELI"], ["dt", "🚚 Clientes DispatchTrack"], ["reemplazos", "↺ Reemplazos"], ["supervisores", "👤 Supervisores y CECO"], ["lideres", "👥 Líderes y supervisores"], ["colectas", "📦 Centros de colecta"],
   ["justif", "⚖️ Justificación de devoluciones"], ["hitos", "💲 Pago de hitos"], ["categorias", "🏷️ Categorías de observación"]];
 
 export default function ModuloMantenedorCL({ usuario } = {}) {
@@ -117,6 +117,7 @@ export default function ModuloMantenedorCL({ usuario } = {}) {
       </div>
       {vista === "glosario" && <Glosario />}
       {vista === "cecos" && <CecosCentros quien={quien} />}
+      {vista === "dt" && <ClientesDT quien={quien} />}
       {vista === "reemplazos" && <Reemplazos quien={quien} />}
       {vista === "supervisores" && <Supervisores quien={quien} />}
       {vista === "colectas" && <CentrosColecta quien={quien} />}
@@ -1234,6 +1235,73 @@ function SameDayXpt({ quien }) {
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+// ── Clientes DispatchTrack ──────────────────────────────────────────────────
+// La cuenta de DispatchTrack de Bigticket es una sola; el cliente de cada guía
+// (Canon, Hypnos…) viene en "Categorías y grupos → Cliente". El VPS lo lee guía
+// por guía y lo guarda. Aquí aparecen solos los clientes que llegan, con cuántas
+// guías tuvieron en los últimos 30 días; administración les asigna CECO y decide
+// si se capturan.
+function ClientesDT({ quien }) {
+  const [vistos, setVistos] = useState(null);
+  const [conf, setConf] = useState([]);
+  const [cecos, setCecos] = useState([]);
+  const [msg, setMsg] = useState("");
+  const cargar = async () => {
+    const [v, c, a] = await Promise.all([
+      apiSuave("vw_clientes_dt_cl?select=*&order=guias_30d.desc", null),
+      apiSuave("clientes_dt_cl?select=*&order=cliente", []),
+      apiSuave("cecos_admin?select=nombre&activo=eq.true&order=nombre", []),
+    ]);
+    setVistos(v); setConf(c || []); setCecos([...new Set((a || []).map(x => x.nombre))]);
+  };
+  useEffect(() => { cargar(); }, []);
+  const guardar = async (cliente, cambios) => {
+    const actual = conf.find(x => x.cliente === cliente) || { capturar: true, cecos_admin: null };
+    const n = { ...actual, ...cambios };
+    setMsg("");
+    try { await rpc("fn_cliente_dt_guardar", { p_cliente: cliente, p_cecos: n.cecos_admin || null, p_capturar: n.capturar !== false, p_por: quien });
+          setMsg(`✓ ${cliente} guardado`); await cargar(); }
+    catch (e) { setMsg("No se pudo guardar: " + e.message); }
+  };
+  if (vistos === null) return <div className="mt-card"><div className="mt-tit">Clientes DispatchTrack</div>
+    <div className="mt-sub" style={{ color: AMBAR }}>Faltan los SQL de esta pasada (vw_clientes_dt_cl).</div></div>;
+  const nombres = [...new Set([...vistos.map(v => v.cliente), ...conf.map(c => c.cliente)])];
+  return (
+    <div className="mt-card">
+      <div className="mt-tit">Clientes DispatchTrack</div>
+      <div className="mt-sub">
+        Todos los clientes llegan por la misma cuenta de DispatchTrack de Bigticket. El cliente de cada guía es el de
+        "Categorías y grupos → Cliente" y el VPS lo lee solo. Un cliente nuevo aparece aquí en cuanto tiene guías:
+        asígnale su CECO (si se deja "Por región", usa la regla de Canon: Metropolitana → C_RM, Valparaíso → C_VIÑA). Si se marca "no capturar", sus guías dejan de guardarse en el Maestro desde la próxima vuelta (cada 20 minutos).
+      </div>
+      {msg && <div className="mt-msg" style={{ color: msg.startsWith("✓") ? VERDE : ROJO }}>{msg}</div>}
+      <table className="mt-tabla" style={{ maxWidth: 900 }}>
+        <thead><tr><th>Cliente (en DispatchTrack)</th><th style={{ textAlign: "right" }}>Guías 30 días</th><th>Última guía</th><th>CECO</th><th>Capturar</th></tr></thead>
+        <tbody>
+          {nombres.map(n => {
+            const v = vistos.find(x => x.cliente === n) || {};
+            const c = conf.find(x => x.cliente === n) || {};
+            const sinCliente = n === "(sin cliente aún)";
+            return (
+              <tr key={n} style={c.capturar === false ? { opacity: 0.55 } : undefined}>
+                <td style={{ fontWeight: 700, color: sinCliente ? AMBAR : NAVY }}>{n}
+                  {!c.cliente && !sinCliente && <span className="mt-chip" style={{ marginLeft: 6, color: AMBAR }}>nuevo</span>}</td>
+                <td style={{ textAlign: "right" }}>{Number(v.guias_30d || 0).toLocaleString("es-CL")}</td>
+                <td>{v.ultima_fecha ? v.ultima_fecha.split("-").reverse().join("-") : "—"}</td>
+                <td>{sinCliente ? <span className="mt-sub">El VPS las completa en las próximas vueltas</span> : (
+                  <select className="mt-in" value={c.cecos_admin || ""} onChange={e => guardar(n, { cecos_admin: e.target.value || null })}>
+                    <option value="">Por región (C_RM / C_VIÑA)</option>{cecos.map(x => <option key={x}>{x}</option>)}
+                  </select>)}</td>
+                <td>{!sinCliente && <input type="checkbox" checked={c.capturar !== false} onChange={e => guardar(n, { capturar: e.target.checked })} />}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
     </div>
   );
 }

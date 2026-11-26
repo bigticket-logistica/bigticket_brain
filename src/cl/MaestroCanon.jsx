@@ -10,6 +10,11 @@
 // alerta: guías sin cerrar, región sin CECO, patente no válida, líneas que no
 // cuadran. El maestro trae TODO; las alertas no quitan filas.
 //
+// Clientes: la cuenta de DispatchTrack es una sola y trae a varios clientes (Canontex,
+// HYPNOS SPA…). El cliente de cada guía lo lee el VPS desde "Categorías y grupos →
+// Cliente"; su CECO se define en Mantenedor → Clientes DispatchTrack (si no tiene,
+// se usa la regla de región de Canon: C_RM / C_VIÑA).
+//
 // Empresa de cada patente: la misma regla que el maestro de MELI (función
 // empresasDePatentes de Maestro.jsx): manda Certronic (certronic_vehiculos_cl) y,
 // si la patente no está, el Excel Maestro Certificación.
@@ -332,7 +337,7 @@ export default function MaestroCanon({ fecha, api, apiSuave, descargarCSV, empre
   const [emp, setEmp] = useState({});   // patente → { tercero, rut_tercero, estado }
   const [error, setError] = useState("");
   const [vista, setVista] = useState("guias");   // guias · rutas · comparar
-  const [f, setF] = useState({ servicio: "", cecos: "", busca: "", soloAlertas: false });
+  const [f, setF] = useState({ servicio: "", cecos: "", cliente: "", busca: "", soloAlertas: false });
   const [periodo, setPeriodo] = useState({ desde: fecha, hasta: fecha, bajando: false, msg: "" });
   useEffect(() => { setPeriodo((p) => ({ ...p, desde: fecha, hasta: fecha, msg: "" })); }, [fecha]);
 
@@ -358,6 +363,7 @@ export default function MaestroCanon({ fecha, api, apiSuave, descargarCSV, empre
   const vistaFilas = conAlertas.filter((r) =>
     (!f.servicio || r.servicio === f.servicio) &&
     (!f.cecos || (f.cecos === "_sin" ? !r.cecos : r.cecos === f.cecos)) &&
+    (!f.cliente || (f.cliente === "_sin" ? !r.cliente : r.cliente === f.cliente)) &&
     (!f.soloAlertas || r._alertas.length) &&
     (!texto || [r.idViajes, r.FOLIO_GUIA, r.patentes, r.conductor, r.DIRECCION, r.comuna, textoEmpresa(r.patentes, emp)]
       .some((c) => String(c ?? "").toLowerCase().includes(texto))));
@@ -368,6 +374,12 @@ export default function MaestroCanon({ fecha, api, apiSuave, descargarCSV, empre
   const rutasIds = [...new Set(vistaFilas.map((r) => r.idViajes))];
   const alertas = vistaFilas.filter((r) => r._alertas.length);
   const cargUM = suma(um, "cargados");
+  const clientes = [...new Set(conAlertas.map((r) => r.cliente).filter(Boolean))].sort();
+  const sinCliente = conAlertas.filter((r) => !r.cliente).length;
+  const porCliente = [...clientes, ...(sinCliente ? [null] : [])].map((c) => {
+    const g = vistaFilas.filter((r) => (r.cliente || null) === c);
+    return { cliente: c, guias: g.length, rutas: new Set(g.map((r) => r.idViajes)).size, cargados: suma(g, "cargados"), entregados: suma(g, "entregados") };
+  });
 
   // Por ruta
   const porRuta = rutasIds.map((id) => {
@@ -382,6 +394,7 @@ export default function MaestroCanon({ fecha, api, apiSuave, descargarCSV, empre
   // Columnas del CSV: las 14 del maestro manual y, al final, PESO, COMUNA y EMPRESA
   const columnasCSV = (empresas) => [
     ...COLUMNAS_MAESTRO.map((c) => ({ titulo: c, valor: (r) => (c === "VOLUMEN" ? decimalCL(r[c]) : r[c]) })),
+    { titulo: "CLIENTE", valor: (r) => r.cliente || "" },
     { titulo: "PESO", valor: (r) => decimalCL(r.PESO) },
     { titulo: "COMUNA", valor: (r) => r.comuna },
     { titulo: "EMPRESA", valor: (r) => textoEmpresa(r.patentes, empresas) },
@@ -432,14 +445,28 @@ export default function MaestroCanon({ fecha, api, apiSuave, descargarCSV, empre
         <Kpi titulo="Peso UM (kg)" valor={kg(suma(um, "PESO"))} sub={`troncal ${kg(suma(tr, "PESO"))} kg`} />
         <Kpi titulo="Alertas" valor={fmt(alertas.length)} color={alertas.length ? AMBAR : VERDE} sub="guías para revisar" />
       </div>}
+      {vista !== "comparar" && porCliente.length > 1 && (
+        <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap", fontSize: 12.5 }}>
+          {porCliente.map((c) => (
+            <div key={c.cliente || "_sin"} onClick={() => setF((x) => ({ ...x, cliente: x.cliente === (c.cliente || "_sin") ? "" : (c.cliente || "_sin") }))}
+                 style={{ cursor: "pointer", background: f.cliente === (c.cliente || "_sin") ? "#eef2f9" : "#fff", border: "1px solid #e6e9ef", borderRadius: 10, padding: "8px 12px" }}>
+              <b style={{ color: c.cliente ? NAVY : AMBAR }}>{c.cliente || "Sin cliente aún"}</b>
+              <span style={{ color: "#64748b" }}> · {fmt(c.rutas)} rutas · {fmt(c.guias)} guías · {fmt(c.entregados)}/{fmt(c.cargados)} entregados</span>
+            </div>
+          ))}
+        </div>
+      )}
 
       <div style={{ background: "#fff", border: "1px solid #e6e9ef", borderRadius: 10, padding: "10px 16px", marginBottom: 12,
                     display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
         {vista !== "comparar" && <>
         <input className="mj-input" placeholder="Buscar ruta, folio, patente, empresa, conductor o dirección…" value={f.busca}
                onChange={(e) => setF((x) => ({ ...x, busca: e.target.value }))} style={{ minWidth: 300, flex: 1 }} />
+        {clientes.length > 1 || sinCliente ? <>
+          {clientes.map((c) => chip("cliente", c, c))}{sinCliente ? chip("cliente", "_sin", "Sin cliente aún") : null}
+          <span style={{ width: 1, height: 22, background: "#e6e9ef" }} /></> : null}
         {chip("servicio", "UM", "UM")}{chip("servicio", "TRONCAL", "Troncal")}
-        {chip("cecos", "C_RM", "C_RM")}{chip("cecos", "C_VIÑA", "C_VIÑA")}{chip("cecos", "_sin", "Sin CECO")}
+        {[...new Set(["C_RM", "C_VIÑA", ...conAlertas.map((r) => r.cecos).filter(Boolean)])].map((c) => chip("cecos", c, c))}{chip("cecos", "_sin", "Sin CECO")}
         <button className="mj-btn" onClick={() => setF((x) => ({ ...x, soloAlertas: !x.soloAlertas }))}
                 style={f.soloAlertas ? { background: AMBAR, color: "#fff", borderColor: AMBAR } : {}}>⚠ Solo alertas</button>
         </>}
@@ -504,7 +531,7 @@ export default function MaestroCanon({ fecha, api, apiSuave, descargarCSV, empre
         <div style={{ overflowX: "auto" }}>
           <table className="mj-tabla">
             <thead><tr>
-              <th>ID viaje</th><th>Folio guía</th><th>Servicio</th><th>CECO</th><th>Patente</th><th>Empresa (Certronic)</th><th>Conductor</th>
+              <th>ID viaje</th><th>Folio guía</th><th>Cliente</th><th>Servicio</th><th>CECO</th><th>Patente</th><th>Empresa (Certronic)</th><th>Conductor</th>
               <th className="num">Par.</th><th className="num">Carg.</th><th className="num">Entr.</th><th className="num">Dev.</th>
               <th>Seg. zonal</th><th>Tipo</th><th className="num">Volumen</th><th className="num">Peso (kg)</th><th>Comuna</th><th>Dirección</th><th>Estado</th><th>Alertas</th>
             </tr></thead>
@@ -513,6 +540,7 @@ export default function MaestroCanon({ fecha, api, apiSuave, descargarCSV, empre
                 <tr key={`${r.idViajes}-${r.FOLIO_GUIA}`} style={r._alertas.length ? { background: "#fffbeb" } : {}}>
                   <td style={{ fontWeight: 700 }}>{r.idViajes}</td>
                   <td style={{ fontFamily: "ui-monospace, monospace", fontSize: 12 }}>{r.FOLIO_GUIA}</td>
+                  <td style={{ fontSize: 12, whiteSpace: "nowrap" }}>{r.cliente || <span style={{ color: AMBAR }}>sin cliente aún</span>}</td>
                   <td>{r.servicio === "TRONCAL" ? <span style={{ color: NAVY, fontWeight: 700 }}>Troncal</span> : "UM"}</td>
                   <td>{r.cecos || <span style={{ color: AMBAR }}>sin CECO</span>}</td>
                   <td style={{ fontWeight: 700 }}>{r.patentes || "—"}</td>
