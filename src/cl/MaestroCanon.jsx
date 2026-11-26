@@ -553,7 +553,7 @@ export default function MaestroCanon({ fecha, api, apiSuave, descargarCSV, empre
                   <td style={{ fontSize: 12 }}>{r.segmentacionZonal}</td><td style={{ fontSize: 12 }}>{r.TIPO}</td>
                   <td className="num">{vol(r.VOLUMEN)}</td><td className="num">{kg(r.PESO)}</td>
                   <td style={{ fontSize: 12, whiteSpace: "nowrap" }}>{r.comuna || "—"}</td>
-                  <td style={{ fontSize: 12, maxWidth: 320 }}>{r.DIRECCION || "—"}</td>
+                  <td style={{ fontSize: 12, minWidth: 260, maxWidth: 340, whiteSpace: "normal", wordBreak: "break-word", lineHeight: 1.35 }}>{r.DIRECCION || "—"}</td>
                   <td style={{ fontSize: 12, color: (ESTADO[r.estado] || {}).c || "#64748b", whiteSpace: "nowrap" }}
                       title={r.subestado || ""}>{(ESTADO[r.estado] || {}).t || r.estado || "—"}{r.subestado ? ` · ${r.subestado}` : ""}</td>
                   <td style={{ fontSize: 11.5, color: AMBAR }}>{r._alertas.join(" · ")}</td>
