@@ -25,6 +25,7 @@
 import { useState, useEffect } from "react";
 import { CalendarioRango, fechaCorta, difDias } from "./Maestro";
 import CuidadoActivoCL, { CA_MANTENEDORES } from "./CuidadoActivo";
+import { MantAccesosCL } from "./AccesosAvisos";
 
 const CL_URL = "https://hmowsazntdjtsvdfgutn.supabase.co";
 const CL_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imhtb3dzYXpudGRqdHN2ZGZndXRuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQ5MTc4NzgsImV4cCI6MjEwMDQ5Mzg3OH0.xAJokU0eFhof--d8R4uCRBr2-CJLzC5re0w1IPRqQR8";
@@ -104,6 +105,12 @@ export default function ModuloMantenedorCL({ usuario } = {}) {
           {MAESTRO_MANT.map(([k, t]) => <button key={k} className={`mt-chip ${vista === k ? "on" : ""}`} onClick={() => setVista(k)}>{t}</button>)}
         </div>
       </div>
+      <div className="mt-card" style={{ padding: "10px 14px" }}>
+        {titulo("🔐 Brain: accesos y avisos")}
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          <button className={`mt-chip ${vista === "accesos" ? "on" : ""}`} onClick={() => setVista("accesos")}>👁 Quién ve qué · 🔔 avisos y sonidos · ↺ reemplazos</button>
+        </div>
+      </div>
       <div className="mt-card" style={{ padding: "10px 14px", borderColor: esCA ? "#FF6600" : undefined }}>
         {titulo("🛠️ Cuidado de Activo", "#c2410c")}
         {grupos.map((g) => (
@@ -128,6 +135,7 @@ export default function ModuloMantenedorCL({ usuario } = {}) {
       {vista === "hitos" && <PagoHitos quien={quien} />}
       {vista === "lideres" && <Lideres quien={quien} />}
       {vista === "categorias" && <CategoriasObs quien={quien} />}
+      {vista === "accesos" && <MantAccesosCL usuario={usuario} />}
       {esCA && (
         <div>
           <div className="mt-sub">Cuidado de Activo › {(CA_MANTENEDORES.find((x) => "ca:" + x[0] === vista) || [])[2]} › <b>{(CA_MANTENEDORES.find((x) => "ca:" + x[0] === vista) || [])[1]}</b></div>
