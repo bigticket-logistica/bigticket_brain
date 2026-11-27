@@ -3594,6 +3594,26 @@ function MantMotivosOtraDet({ quien }) {
   );
 }
 
+// D-03 · Cuánto acierta Biggy en las detenciones y el interruptor del modo automático (nunca se activa solo)
+function DetPrecision({ quien }) {
+  const [p, setP] = useState(null);
+  const cargar = () => api("vw_det_precision_cl?select=*").then((r) => setP((r || [])[0] || null)).catch(() => setP(null));
+  useEffect(() => { cargar(); }, []);
+  if (!p) return null;
+  const listo = p.revisiones >= p.n_requerido && Number(p.precision) >= Number(p.umbral), auto = p.modo_auto === "si";
+  const cambiar = async () => {
+    if (!auto && !window.confirm(`Biggy decidirá solo las detenciones por revisar (justificada, no justificada o al supervisor). Acierta ${p.precision}% de las últimas ${p.revisiones}. ¿Activar?`)) return;
+    try { await rpc("fn_ca_mantenedor_guardar", { p_tabla: "ca_config_cl", p_clave: "det_ia_auto", p_campo: "valor", p_valor: auto ? "no" : "si", p_por: quien }); cargar(); } catch (e) { alert(e.message); }
+  };
+  return (
+    <span style={{ fontSize: 12, color: C.suave, display: "inline-flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+      🤖 Biggy acierta <b style={{ color: listo ? C.verde : C.texto }}>{p.precision ?? "—"}%</b> de {p.revisiones} (se necesitan {p.n_requerido} con {p.umbral}%)
+      {auto ? <button style={{ ...btn("sec"), padding: "3px 8px" }} onClick={cambiar}>Automático ACTIVO · desactivar</button>
+        : <button style={{ ...btn("sec"), padding: "3px 8px" }} disabled={!listo} title={listo ? "" : "Se habilita cuando Biggy alcance la precisión requerida"} onClick={cambiar}>Activar automático</button>}
+    </span>
+  );
+}
+
 function UsoTabs({ quien }) {
   const [vista, setVista] = useState("casos");
   return (
@@ -3656,6 +3676,7 @@ function CasosDetencion({ quien }) {
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 10 }}>
         <Periodo f={f} setF={setF} />
         <button style={{ ...btn("sec"), padding: "4px 10px" }} onClick={() => setF({ ...f, desde: hoy, hasta: hoy })}>Hoy</button>
+        <DetPrecision quien={quien} />
         <input style={{ ...inp, minWidth: 220 }} placeholder="Patente, chofer o transportista" value={f.texto} onChange={(e) => setF({ ...f, texto: e.target.value })} />
         {f.estado === "uso_indebido" && <button style={btn()} disabled={busy || !marcados.length} onClick={aConc}>Enviar a Conciliaciones ({marcados.length})</button>}
       </div>
@@ -3670,7 +3691,10 @@ function CasosDetencion({ quien }) {
                 <td style={celda}><PatLink p={x.patente} /> · {fh(x.inicio)}{x.minutos ? ` · ${x.minutos} min` : ""}<div style={{ color: C.tenue, fontSize: 11.5 }}>{x.conductor || "sin chofer"} · {x.empresa || "—"}</div>
                   {x.lat && <a href={`https://maps.google.com/?q=${x.lat},${x.lng}`} target="_blank" rel="noreferrer" style={{ fontSize: 11.5, color: C.navy }}>Ver en el mapa</a>}</td>
                 <td style={celda}>{DET_ORIGEN[x.origen] || x.origen}</td>
-                <td style={{ ...celda, maxWidth: 420, whiteSpace: "pre-line" }}>{x.detalle}{x.resultado_nota && <div style={{ color: C.navy, marginTop: 4 }}>Resultado: {x.resultado_nota}</div>}{x.decision_nota && <div style={{ color: C.tenue }}>Nota: {x.decision_nota}</div>}</td>
+                <td style={{ ...celda, maxWidth: 420, whiteSpace: "pre-line" }}>{x.detalle}{x.resultado_nota && <div style={{ color: C.navy, marginTop: 4 }}>Resultado: {x.resultado_nota}</div>}{x.decision_nota && <div style={{ color: C.tenue }}>Nota: {x.decision_nota}</div>}
+                  {x.biggy_propuesta && <div style={{ marginTop: 6, whiteSpace: "normal", fontSize: 12, borderRadius: 8, padding: "5px 8px", background: x.biggy_propuesta === "justificada" ? C.verdeT : x.biggy_propuesta === "no_justificada" ? C.rojoT : C.ambarT }}>
+                    🤖 <b>Biggy propone: {x.biggy_propuesta === "justificada" ? "justificada" : x.biggy_propuesta === "no_justificada" ? "NO justificada" : "enviar al supervisor"}</b>{x.biggy_confianza ? ` (${x.biggy_confianza} %)` : ""}{x.biggy_motivo ? ` · ${x.biggy_motivo}` : ""}</div>}
+                  {!x.biggy_propuesta && x.biggy_motivo && <div style={{ marginTop: 4, fontSize: 11.5, color: C.tenue }}>🤖 {x.biggy_motivo}</div>}</td>
                 <td style={celda}>{chip(e[0], e[1], e[2])}</td>
                 <td style={{ ...celda, whiteSpace: "nowrap" }}>{x.estado === "por_revisar" && <>
                   <button style={{ ...btn(), padding: "4px 10px" }} disabled={busy} onClick={() => decidir(x, "enviar")}>Enviar a bitácora</button>{" "}
