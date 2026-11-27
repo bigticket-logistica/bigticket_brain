@@ -3508,14 +3508,93 @@ function TareasDetencion() {
   );
 }
 // Uso y detenciones: «Paradas del día» y «Casos de detención» (mejoras de Maycol, 13-11-2026)
+// PR-06 · sumar días a una fecha AAAA-MM-DD
+const sumarDias = (s, k) => { const [y, m, d] = String(s).split("-").map(Number); const x = new Date(y, m - 1, d + k); return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, "0")}-${String(x.getDate()).padStart(2, "0")}`; };
+// PR-05 · Interrupciones levantadas por los transportistas (colación, baño, carga, otra detención, desvío), con el resultado del supervisor
+const INT_TIPO = { colacion: "Colación", bano: "Baño", carga: "Carga eléctrica o de combustible", aviso: "Otra detención", desvio: "Desvío autorizado" };
+function InterrupcionesTransportistas() {
+  const [f, setF] = useState({ desde: hoyCL(), hasta: hoyCL(), texto: "", tipo: "" });
+  const [filas, setFilas] = useState(null);
+  useEffect(() => {
+    setFilas(null);
+    const q = [`inicio=gte.${f.desde || "2026-01-01"}T00:00:00-03:00`, `inicio=lte.${f.hasta || hoyCL()}T23:59:59-03:00`].join("&");
+    api(`vw_interrupciones_cl?select=*&${q}&order=inicio.desc&limit=3000`).then(setFilas).catch(() => setFilas([]));
+  }, [f.desde, f.hasta]);
+  const vis = (filas || []).filter((x) => (!f.tipo || x.tipo === f.tipo) && (!f.texto || `${x.patente} ${x.empresa || ""} ${x.hecha_por_nombre || ""} ${x.motivo || ""}`.toLowerCase().includes(f.texto.toLowerCase())));
+  const EST = { pendiente: ["Pendiente del supervisor", C.ambar], aceptado: ["Aprobada", C.verde], rechazado: ["Rechazada", C.rojo] };
+  const celda = { padding: "7px 9px", borderBottom: `1px solid ${C.borde}`, fontSize: 12.5, verticalAlign: "top" };
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end", marginBottom: 10 }}>
+        <label style={{ fontSize: 12, color: C.suave }}>Desde<br /><input type="date" style={inp} value={f.desde} onChange={(e) => setF({ ...f, desde: e.target.value })} /></label>
+        <label style={{ fontSize: 12, color: C.suave }}>Hasta<br /><input type="date" style={inp} value={f.hasta} onChange={(e) => setF({ ...f, hasta: e.target.value })} /></label>
+        <button style={{ ...btn("sec"), padding: "6px 10px" }} onClick={() => setF({ ...f, desde: hoyCL(), hasta: hoyCL() })}>Hoy</button>
+        <select style={inp} value={f.tipo} onChange={(e) => setF({ ...f, tipo: e.target.value })}><option value="">Todos los tipos</option>{Object.entries(INT_TIPO).map(([k, t]) => <option key={k} value={k}>{t}</option>)}</select>
+        <input style={{ ...inp, minWidth: 220 }} placeholder="Patente, empresa, chofer o motivo" value={f.texto} onChange={(e) => setF({ ...f, texto: e.target.value })} />
+        <span style={{ fontSize: 12, color: C.tenue }}>{filas === null ? "Cargando…" : `${vis.length} interrupción(es)`}</span>
+      </div>
+      <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1000 }}>
+          <thead><tr style={{ background: C.fondo, textAlign: "left" }}>{["Inicio", "Patente", "Empresa · quién", "Tipo", "Motivo y comentario", "Duración", "Supervisor"].map((h) => <th key={h} style={{ ...celda, color: C.suave }}>{h}</th>)}</tr></thead>
+          <tbody>
+            {filas !== null && vis.length === 0 && <tr><td colSpan={7} style={{ ...celda, color: C.tenue, textAlign: "center" }}>Sin interrupciones en este período.</td></tr>}
+            {vis.map((x) => { const e = EST[x.estado_sup]; return (
+              <tr key={x.id}>
+                <td style={celda}>{fh(x.inicio)}{x.lat_ini && <div><a href={`https://maps.google.com/?q=${x.lat_ini},${x.lng_ini}`} target="_blank" rel="noreferrer" style={{ fontSize: 11.5, color: C.navy }}>Ver en el mapa</a></div>}</td>
+                <td style={celda}><PatLink p={x.patente} />{x.ceco && <div style={{ fontSize: 11, color: C.tenue }}>{x.ceco}</div>}</td>
+                <td style={celda}>{x.empresa || "—"}<div style={{ fontSize: 11.5, color: C.tenue }}>{x.hecha_por_nombre || ""}</div></td>
+                <td style={celda}>{INT_TIPO[x.tipo] || x.tipo}</td>
+                <td style={{ ...celda, maxWidth: 320 }}>{x.motivo || "—"}{x.comentario && <div style={{ color: C.suave }}>{x.comentario}</div>}</td>
+                <td style={celda}>{x.fin ? `${x.minutos} min` : <span style={{ color: C.ambar }}>en curso ({x.minutos} min)</span>}</td>
+                <td style={{ ...celda, maxWidth: 260 }}>{e ? <span style={{ color: e[1], fontWeight: 700 }}>{e[0]}</span> : "—"}{x.nota_sup && <div style={{ color: C.suave }}>«{x.nota_sup}»</div>}{x.resuelto_por && <div style={{ fontSize: 11, color: C.tenue }}>{x.resuelto_por} · {fh(x.resuelto_at)}</div>}</td>
+              </tr>
+            ); })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// PR-02 · Mantenedor de motivos de «Otra detención» (lo que ve el transportista en su portal)
+function MantMotivosOtraDet({ quien }) {
+  const [filas, setFilas] = useState(null);
+  const [n, setN] = useState({ codigo: "", nombre: "" });
+  const [msg, setMsg] = useState("");
+  const cargar = () => api("ca_motivos_otra_det_cl?select=*&order=orden").then(setFilas).catch(() => setFilas([]));
+  useEffect(() => { cargar(); }, []);
+  const g = async (x, cambios) => { setMsg(""); try { await rpc("fn_motivo_otra_det_guardar", { p_codigo: x.codigo, p_nombre: cambios.nombre ?? x.nombre, p_activo: cambios.activo ?? x.activo, p_orden: cambios.orden ?? x.orden, p_por: quien }); setMsg("Guardado"); cargar(); } catch (e) { setMsg(e.message); } };
+  if (filas === null) return <div style={{ color: C.tenue }}>Cargando…</div>;
+  return (
+    <div>
+      <div style={{ fontSize: 12, color: C.tenue, marginBottom: 10 }}>Motivos que el transportista elige en su portal al avisar una «Otra detención». Cada aviso crea una tarea al supervisor para aprobarlo o rechazarlo. Colación, baño, carga, trámites, error de GPS y uso personal tienen su propia tarjeta y no van aquí.</div>
+      {msg && <div style={{ fontSize: 12.5, marginBottom: 8, color: msg === "Guardado" ? C.verde : C.rojo }}>{msg}</div>}
+      <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12 }}>
+        {filas.map((x) => (
+          <div key={x.codigo} style={{ display: "flex", gap: 10, alignItems: "center", padding: "8px 12px", borderBottom: `1px solid ${C.borde}`, opacity: x.activo ? 1 : 0.5 }}>
+            <input type="number" style={{ ...inp, width: 64 }} defaultValue={x.orden} onBlur={(e) => Number(e.target.value) !== x.orden && g(x, { orden: Number(e.target.value) })} />
+            <input style={{ ...inp, flex: 1 }} defaultValue={x.nombre} onBlur={(e) => e.target.value.trim() && e.target.value !== x.nombre && g(x, { nombre: e.target.value.trim() })} />
+            <span style={{ fontSize: 11, color: C.tenue }}>{x.codigo}</span>
+            <label style={{ fontSize: 12.5, display: "flex", gap: 5, alignItems: "center" }}><input type="checkbox" checked={!!x.activo} onChange={(e) => g(x, { activo: e.target.checked })} /> Activo</label>
+          </div>
+        ))}
+      </div>
+      <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+        <input style={{ ...inp, minWidth: 300 }} placeholder="Motivo nuevo (ej.: Control policial)" value={n.nombre} onChange={(e) => setN({ codigo: e.target.value.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "").slice(0, 40), nombre: e.target.value })} />
+        <button style={btn()} disabled={!n.nombre.trim()} onClick={async () => { await g({ codigo: n.codigo, nombre: n.nombre.trim(), activo: true, orden: (filas.length + 1) * 10 }, {}); setN({ codigo: "", nombre: "" }); }}>Agregar</button>
+      </div>
+    </div>
+  );
+}
+
 function UsoTabs({ quien }) {
   const [vista, setVista] = useState("casos");
   return (
     <div>
       <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
-        {[["casos", "Casos de detención"], ["paradas", "Paradas del día"]].map(([k, t]) => <button key={k} style={btn(vista === k ? undefined : "sec")} onClick={() => setVista(k)}>{t}</button>)}
+        {[["casos", "Casos de detención"], ["paradas", "Paradas del día"], ["interr", "Interrupciones de transportistas"]].map(([k, t]) => <button key={k} style={btn(vista === k ? undefined : "sec")} onClick={() => setVista(k)}>{t}</button>)}
       </div>
-      {vista === "casos" ? <CasosDetencion quien={quien} /> : <UsoDetenciones quien={quien} />}
+      {vista === "casos" ? <CasosDetencion quien={quien} /> : vista === "interr" ? <InterrupcionesTransportistas /> : <UsoDetenciones quien={quien} />}
     </div>
   );
 }
@@ -3524,7 +3603,7 @@ const DET_EST = { por_revisar: ["Por revisar (ejecutivo)", C.ambarT, C.ambar], e
 const DET_ORIGEN = { sin_solicitud: "Sin solicitud", solicitud_excedida: "Solicitud excedida", colacion_colecta: "Colación en colecta" };
 function CasosDetencion({ quien }) {
   const [filas, setFilas] = useState(null);
-  const [f, setF] = useState({ estado: "por_revisar", texto: "", desde: "", hasta: "" });
+  const [f, setF] = useState({ estado: "", texto: "", desde: hoyCL(), hasta: hoyCL() });   // PR-06: la bandeja parte en el día de hoy
   const [sel, setSel] = useState({});
   const [modo, setModo] = useState("manual");
   const [busy, setBusy] = useState(false);
@@ -3538,6 +3617,14 @@ function CasosDetencion({ quien }) {
     setBusy(true); try { await rpc("fn_det_decidir", { p_caso: x.id, p_accion: accion, p_nota: nota || null, p_por: quien }); await cargar(); } catch (e) { alert(e.message); } finally { setBusy(false); }
   };
   const marcados = Object.keys(sel).filter((k) => sel[k]).map(Number);
+  // PR-07: Justificada Sí / No (No → aviso a la empresa y Conciliaciones; en prueba, sin aviso ni cobro)
+  const justificar = async (x, si) => {
+    const nota = window.prompt(si ? "Comentario (opcional): por qué está justificada" : "¿Por qué NO está justificada? (llega a la empresa en su portal y va a Conciliaciones)", "");
+    if (nota === null) return;
+    setBusy(true); try { alert(await rpc("fn_det_justificar", { p_caso: x.id, p_justificada: si, p_nota: nota || null, p_por: quien })); await cargar(); } catch (e) { alert(e.message); } finally { setBusy(false); }
+  };
+  const hoy = hoyCL();
+  const anteriores = filas.filter((x) => x.estado === "por_revisar" && String(new Date(x.inicio).toLocaleDateString("en-CA", { timeZone: "America/Santiago" })) < hoy);
   const aConc = async () => {
     if (!marcados.length || !window.confirm(`Enviar ${marcados.length} caso(s) de uso indebido a Conciliaciones? Entran al cierre mensual como falta N° 14 (a la empresa), con derecho a apelar.`)) return;
     setBusy(true); try { const n = await rpc("fn_det_enviar_conc", { p_casos: marcados, p_por: quien }); alert(`${n} caso(s) enviados a Conciliaciones.`); setSel({}); await cargar(); } catch (e) { alert(e.message); } finally { setBusy(false); }
@@ -3556,16 +3643,20 @@ function CasosDetencion({ quien }) {
           </div>
         ))}
       </div>
+      {anteriores.length > 0 && <div onClick={() => setF({ ...f, estado: "por_revisar", desde: "", hasta: sumarDias(hoy, -1) })} style={{ background: C.ambarT, border: `1px solid ${C.ambar}`, color: C.ambar, borderRadius: 8, padding: "7px 12px", fontSize: 12.5, marginBottom: 10, cursor: "pointer", fontWeight: 700 }}>
+        ⚠ {anteriores.length} pendiente{anteriores.length === 1 ? "" : "s"} de días anteriores sin revisar · ver
+      </div>}
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 10 }}>
         <Periodo f={f} setF={setF} />
+        <button style={{ ...btn("sec"), padding: "4px 10px" }} onClick={() => setF({ ...f, desde: hoy, hasta: hoy })}>Hoy</button>
         <input style={{ ...inp, minWidth: 220 }} placeholder="Patente, chofer o transportista" value={f.texto} onChange={(e) => setF({ ...f, texto: e.target.value })} />
         {f.estado === "uso_indebido" && <button style={btn()} disabled={busy || !marcados.length} onClick={aConc}>Enviar a Conciliaciones ({marcados.length})</button>}
       </div>
       <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, overflowX: "auto" }}>
         <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 980 }}>
-          <thead><tr style={{ background: C.fondo, textAlign: "left" }}><th style={celda} />{["Detención", "Origen", "Detalle", "Estado", ""].map((h) => <th key={h} style={{ ...celda, color: C.suave }}>{h}</th>)}</tr></thead>
+          <thead><tr style={{ background: C.fondo, textAlign: "left" }}><th style={celda} />{["Detención", "Origen", "Detalle", "Estado", "Enviar al supervisor", "Justificada"].map((h) => <th key={h} style={{ ...celda, color: C.suave }}>{h}</th>)}</tr></thead>
           <tbody>
-            {vis.length === 0 && <tr><td colSpan={6} style={{ ...celda, color: C.tenue, textAlign: "center" }}>Sin casos con este filtro.</td></tr>}
+            {vis.length === 0 && <tr><td colSpan={7} style={{ ...celda, color: C.tenue, textAlign: "center" }}>Sin casos con este filtro.</td></tr>}
             {vis.map((x) => { const e = DET_EST[x.estado] || [x.estado, C.fondo, C.suave]; return (
               <tr key={x.id}>
                 <td style={celda}>{x.estado === "uso_indebido" && <input type="checkbox" checked={!!sel[x.id]} onChange={(ev) => setSel({ ...sel, [x.id]: ev.target.checked })} />}</td>
@@ -3577,6 +3668,10 @@ function CasosDetencion({ quien }) {
                 <td style={{ ...celda, whiteSpace: "nowrap" }}>{x.estado === "por_revisar" && <>
                   <button style={{ ...btn(), padding: "4px 10px" }} disabled={busy} onClick={() => decidir(x, "enviar")}>Enviar a bitácora</button>{" "}
                   <button style={{ ...btn("sec"), padding: "4px 10px" }} disabled={busy} onClick={() => decidir(x, "descartar")}>Descartar</button></>}</td>
+                <td style={{ ...celda, whiteSpace: "nowrap" }}>{["por_revisar", "en_bitacora"].includes(x.estado) ? <>
+                  <button style={{ ...btn("verde"), padding: "4px 10px" }} disabled={busy} onClick={() => justificar(x, true)}>Sí</button>{" "}
+                  <button style={{ ...btn("rojo"), padding: "4px 10px" }} disabled={busy} onClick={() => justificar(x, false)}>No</button></>
+                  : x.estado === "justificada" ? <span style={{ color: C.verde, fontWeight: 700 }}>Sí</span> : ["uso_indebido", "enviada_conc"].includes(x.estado) ? <span style={{ color: C.rojo, fontWeight: 700 }}>No</span> : "—"}</td>
               </tr>
             ); })}
           </tbody>
@@ -5175,6 +5270,7 @@ function MantAgAseguradoras({ quien }) {
 export const CA_MANTENEDORES = [
   ["config", "Parámetros", "General"], ["componentes", "Componentes del gasto", "General"], ["proveedores", "Proveedores", "General"],
   ["multas", "Multas (Anexo III)", "General"], ["configuracion", "Tareas, justificaciones y correos", "General"], ["eventos", "Avisos por evento", "General"],
+  ["motivos_otra", "Motivos de «Otra detención»", "General"],
   ["talleres", "Talleres", "Mantenciones"], ["pautas", "Pautas por modelo", "Mantenciones"], ["vidamod", "Vida útil por modelo", "Mantenciones"],
   ["aud_form", "Formularios de auditoría", "Auditorías"], ["aud_tipos", "Tipos de auditoría", "Auditorías"], ["feriados", "Feriados", "Auditorías"],
   ["fleetup", "Alertas de cámara (español)", "GPS y bitácora"], ["bit_ind", "Indicadores de la bitácora", "GPS y bitácora"],
@@ -5191,6 +5287,7 @@ function MantenedorCA({ vista, quien, rol }) {
     case "multas": return <MultasAnexo quien={quien} puede={puede} />;
     case "configuracion": return <Configuracion quien={quien} />;
     case "eventos": return <MantEventos quien={quien} />;
+    case "motivos_otra": return <MantMotivosOtraDet quien={quien} />;
     case "talleres": return <TalleresMnt quien={quien} />;
     case "pautas": return <PautasMnt quien={quien} />;
     case "vidamod": return <VidaModeloMnt quien={quien} />;
