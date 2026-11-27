@@ -4763,14 +4763,14 @@ function Combustible({ quien }) {
   return (
     <div>
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginBottom: 14 }}>
-        {[["mes", "Resumen del mes"], ["km", "Km Geotab vs. ruta"], ["cargas", "Cargas de Copec"]].map(([k, t]) => <button key={k} style={btn(vista === k ? undefined : "sec")} onClick={() => setVista(k)}>{t}</button>)}
+        {[["mes", "Resumen del mes"], ["kmno", "Km no operativos"], ["km", "Km Geotab vs. ruta"], ["cargas", "Cargas de Copec"]].map(([k, t]) => <button key={k} style={btn(vista === k ? undefined : "sec")} onClick={() => setVista(k)}>{t}</button>)}
         <label style={{ fontSize: 12.5, color: C.suave, marginLeft: 8 }}>Mes <input type="month" style={inp} value={mes} onChange={(e) => e.target.value && setMes(e.target.value)} /></label>
         <label style={{ ...btn("sec"), display: "inline-block", cursor: cargando ? "wait" : "pointer" }}>
           {cargando || "Cargar informe de Copec (Excel)"}
           <input type="file" accept=".xlsx,.xls" style={{ display: "none" }} disabled={!!cargando} onChange={(e) => { importar(e.target.files?.[0]); e.target.value = ""; }} />
         </label>
       </div>
-      {vista === "mes" ? <CombustibleMes key={mes + rev} mes={mes} quien={quien} /> : vista === "km" ? <CombustibleKm key={mes + rev} mes={mes} /> : <CombustibleCargas key={mes + rev} mes={mes} />}
+      {vista === "mes" ? <CombustibleMes key={mes + rev} mes={mes} quien={quien} /> : vista === "kmno" ? <KmNoOperativos key={mes + rev} mes={mes} quien={quien} /> : vista === "km" ? <CombustibleKm key={mes + rev} mes={mes} /> : <CombustibleCargas key={mes + rev} mes={mes} />}
     </div>
   );
 }
@@ -4980,6 +4980,84 @@ function MantCombModelos({ quien }) {
         <label style={{ fontSize: 12, color: C.suave, flex: "1 1 160px" }}>Fuente<br /><input style={{ ...inp, width: "100%", boxSizing: "border-box" }} value={n.fuente} onChange={(e) => setN({ ...n, fuente: e.target.value })} placeholder="Manual del fabricante" /></label>
         <button style={btn()} disabled={!n.marca || !n.modelo || !n.rendimiento} onClick={() => g(n)}>{n.id ? "Guardar cambio" : "Agregar"}</button>
         {n.id && <button style={btn("sec")} onClick={() => setN(vacio)}>Cancelar</button>}
+      </div>
+    </div>
+  );
+}
+
+// Km no operativos (Adriana 27-11): diciembre marcha blanca; desde kmno_desde, avisos y al (avisos + 1) multa
+function KmNoOperativos({ mes, quien }) {
+  const [filas, setFilas] = useState(null);
+  const [cfg, setCfg] = useState({});
+  const [f, setF] = useState({ texto: "", tipo: "" });
+  const cargar = async () => {
+    const [e, c] = await Promise.all([api(`ca_kmno_eventos_cl?fecha=gte.${mes}-01&fecha=lt.${sumarDias(`${mes}-01`, 32).slice(0, 7)}-01&select=*&order=fecha.desc,patente&limit=3000`),
+      api("ca_config_cl?clave=like.kmno_*&select=clave,valor")]);
+    setFilas(e || []); setCfg(Object.fromEntries((c || []).map((x) => [x.clave, x.valor])));
+  };
+  useEffect(() => { cargar().catch(() => setFilas([])); }, [mes]);   // eslint-disable-line react-hooks/exhaustive-deps
+  if (filas === null) return <div style={{ color: C.tenue }}>Cargando…</div>;
+  const avisos = parseInt(cfg.kmno_avisos || "3", 10) || 3;
+  // En marcha blanca se muestra qué habría sido cada vez (n-ésima del mes por patente o empresa, según el mantenedor)
+  const clave = (x) => (cfg.kmno_por === "empresa" ? String(x.rut || x.empresa || x.patente) : x.patente);
+  const orden = {}, cuenta = {};
+  [...filas].filter((x) => !x.anulado).sort((a, b) => String(a.fecha).localeCompare(String(b.fecha))).forEach((x) => { const k = clave(x); cuenta[k] = (cuenta[k] || 0) + 1; orden[x.id] = cuenta[k]; });
+  const habria = (x) => (x.tipo !== "marcha_blanca" ? x.tipo : (orden[x.id] || 0) <= avisos ? "aviso" : "multa");
+  const vis = filas.filter((x) => (!f.tipo || habria(x) === f.tipo) && (!f.texto || `${x.patente} ${x.empresa || ""}`.toLowerCase().includes(f.texto.toLowerCase())));
+  const anular = async (x) => { const nota = window.prompt("¿Por qué se anula? (por ejemplo, el tercero demostró que eran km operativos)"); if (!nota) return; try { await rpc("fn_kmno_anular", { p_id: x.id, p_nota: nota, p_por: quien }); cargar(); } catch (e) { alert(e.message); } };
+  const nMulta = filas.filter((x) => !x.anulado && habria(x) === "multa").length, nAviso = filas.filter((x) => !x.anulado && habria(x) === "aviso").length;
+  const marcha = filas.some((x) => x.tipo === "marcha_blanca");
+  const celda = { padding: "7px 8px", borderBottom: `1px solid ${C.borde}`, fontSize: 12.5 };
+  return (
+    <div>
+      <div style={{ background: marcha ? C.ambarT : C.fondo, border: `1px solid ${marcha ? C.ambar : C.borde}`, borderRadius: 10, padding: "8px 12px", fontSize: 12.5, marginBottom: 10 }}>
+        {marcha ? <><b style={{ color: C.ambar }}>Marcha blanca:</b> estos días se registran sin aviso ni multa. Avisos y multas rigen desde el {fechaCL(cfg.kmno_desde || "2027-01-01")}. La columna «Sería» muestra qué habría pasado.</>
+          : <>Desde el {fechaCL(cfg.kmno_desde || "2027-01-01")}: {avisos} avisos {cfg.kmno_reinicio === "nunca" ? "" : "por mes "}y desde el {avisos + 1}.º, multa (falta N.º {cfg.kmno_falta || "14"} del Anexo III), contados por {cfg.kmno_por === "empresa" ? "empresa" : "patente"}.</>}
+        {" "}Cuenta un día con {cfg.kmno_min_km || "20"} km o más fuera de la operación (km GPS − ruta − traslado − adicionales). Todo editable en Mantenedor › Cuidado de Activo › Combustible.
+      </div>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 10, alignItems: "center" }}>
+        <span style={{ fontWeight: 800, color: C.ambar }}>{nAviso} aviso(s)</span><span style={{ fontWeight: 800, color: C.rojo }}>{nMulta} multa(s){marcha ? " (simuladas)" : ""}</span>
+        <input style={{ ...inp, minWidth: 200 }} placeholder="Patente o empresa" value={f.texto} onChange={(e) => setF({ ...f, texto: e.target.value })} />
+        <select style={inp} value={f.tipo} onChange={(e) => setF({ ...f, tipo: e.target.value })}><option value="">Todos</option><option value="aviso">Avisos</option><option value="multa">Multas</option></select>
+      </div>
+      <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1000 }}>
+          <thead><tr style={{ background: C.fondo, textAlign: "left" }}>{["Fecha", "Patente", "Empresa", "Km GPS", "Ruta", "Traslado", "Adicionales", "Km fuera", "Vez", marcha ? "Sería" : "Resultado", ""].map((h) => <th key={h} style={{ ...celda, color: C.suave }}>{h}</th>)}</tr></thead>
+          <tbody>{vis.length === 0 ? <tr><td colSpan={11} style={{ ...celda, color: C.tenue, textAlign: "center" }}>Sin días con km fuera de la operación en este mes.</td></tr> : vis.map((x) => { const h = habria(x); return (
+            <tr key={x.id} style={{ opacity: x.anulado ? 0.45 : 1 }}>
+              <td style={celda}>{fechaCL(x.fecha)}</td><td style={celda}><PatLink p={x.patente} /></td><td style={celda}>{x.empresa || "—"}</td>
+              <td style={celda}>{Math.round(x.km_geotab)}</td><td style={celda}>{Math.round(x.km_ruta)}</td><td style={celda}>{Math.round(x.km_traslado)}</td><td style={celda}>{x.km_adic ? Math.round(x.km_adic) : "—"}</td>
+              <td style={{ ...celda, fontWeight: 800, color: C.ambar }}>{Math.round(x.km_fuera)}</td>
+              <td style={celda}>{x.n || orden[x.id] || "—"}</td>
+              <td style={celda}>{x.anulado ? <span title={x.anulado_nota}>Anulado</span> : chip(h === "multa" ? `Multa${x.tipo === "marcha_blanca" ? " (simulada)" : ""}` : `Aviso${x.tipo === "marcha_blanca" ? " (simulado)" : ""}`, h === "multa" ? C.rojoT : C.ambarT, h === "multa" ? C.rojo : C.ambar)}{x.avisado_at && <div style={{ fontSize: 11, color: C.tenue }}>avisado {fh(x.avisado_at)}</div>}</td>
+              <td style={celda}>{!x.anulado && <a style={{ cursor: "pointer", color: C.navy, fontSize: 12 }} onClick={() => anular(x)}>Anular</a>}</td>
+            </tr>); })}</tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// Mantenedor de la multa por km no operativos (todos los parámetros editables)
+function MantKmNo({ quien }) {
+  const [cfg, setCfg] = useState(null), [multas, setMultas] = useState([]), [msg, setMsg] = useState("");
+  const cargar = async () => { const [c, m] = await Promise.all([api("ca_config_cl?clave=like.kmno_*&select=clave,valor"), api("ca_multas_cl?activo=is.true&select=numero,falta,monto,unidad&order=numero")]); setCfg(Object.fromEntries((c || []).map((x) => [x.clave, x.valor]))); setMultas(m || []); };
+  useEffect(() => { cargar().catch(() => setCfg({})); }, []);
+  if (cfg === null) return <div style={{ color: C.tenue }}>Cargando…</div>;
+  const g = async (k, v) => { setMsg(""); try { await rpc("fn_ca_mantenedor_guardar", { p_tabla: "ca_config_cl", p_clave: k, p_campo: "valor", p_valor: String(v), p_por: quien }); setMsg("Guardado"); cargar(); } catch (e) { setMsg(e.message); } };
+  const fila = (t, d, input) => <div style={{ display: "grid", gridTemplateColumns: "minmax(220px, 1fr) 2fr", gap: 12, padding: "10px 14px", borderBottom: `1px solid ${C.borde}`, alignItems: "center" }}><div><div style={{ fontWeight: 700, color: C.navy, fontSize: 13 }}>{t}</div><div style={{ fontSize: 11.5, color: C.tenue }}>{d}</div></div><div>{input}</div></div>;
+  return (
+    <div>
+      <div style={{ fontSize: 12, color: C.tenue, marginBottom: 10 }}>Reglas de la multa por km que no son operativos (fuera de ruta, traslado y km adicionales). Se revisa cada mañana el día anterior. Antes de la fecha de inicio se registra como marcha blanca, sin aviso ni multa. Los avisos y multas llegan al portal del tercero (y a su WhatsApp); las multas pasan a Conciliaciones.</div>
+      {msg && <div style={{ fontSize: 12.5, marginBottom: 8, color: msg === "Guardado" ? C.verde : C.rojo }}>{msg}</div>}
+      <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12 }}>
+        {fila("Activo", "Detectar cada día", <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 13 }}><input type="checkbox" checked={cfg.kmno_activo !== "no"} onChange={(e) => g("kmno_activo", e.target.checked ? "si" : "no")} /> Sí</label>)}
+        {fila("Rige desde", "Antes de esta fecha: marcha blanca", <input type="date" style={inp} defaultValue={cfg.kmno_desde} onBlur={(e) => e.target.value && e.target.value !== cfg.kmno_desde && g("kmno_desde", e.target.value)} />)}
+        {fila("Mínimo de km por día", "Km fuera de la operación en un día para que cuente como una vez", <input type="number" min="1" style={{ ...inp, width: 90 }} defaultValue={cfg.kmno_min_km} onBlur={(e) => e.target.value && e.target.value !== cfg.kmno_min_km && g("kmno_min_km", e.target.value)} />)}
+        {fila("Avisos antes de multar", "La vez siguiente es multa, y cada una de ahí en adelante", <input type="number" min="0" style={{ ...inp, width: 90 }} defaultValue={cfg.kmno_avisos} onBlur={(e) => e.target.value !== "" && e.target.value !== cfg.kmno_avisos && g("kmno_avisos", e.target.value)} />)}
+        {fila("Se cuenta por", "Cada patente lleva su conteo, o se suman todas las de la empresa", <select style={inp} value={cfg.kmno_por || "patente"} onChange={(e) => g("kmno_por", e.target.value)}><option value="patente">Patente</option><option value="empresa">Empresa</option></select>)}
+        {fila("El conteo se reinicia", "Cada mes parte de cero, o se acumula siempre", <select style={inp} value={cfg.kmno_reinicio || "mes"} onChange={(e) => g("kmno_reinicio", e.target.value)}><option value="mes">Cada mes</option><option value="nunca">Nunca</option></select>)}
+        {fila("Multa que se aplica", "Falta del Anexo III (el monto se edita en Multas del Anexo III)", <select style={inp} value={cfg.kmno_falta || "14"} onChange={(e) => g("kmno_falta", e.target.value)}>{multas.map((m) => <option key={m.numero} value={m.numero}>N.º {m.numero} · {m.falta} ({m.monto} {m.unidad})</option>)}</select>)}
       </div>
     </div>
   );
@@ -5591,7 +5669,7 @@ export const CA_MANTENEDORES = [
   ["config", "Parámetros", "General"], ["componentes", "Componentes del gasto", "General"], ["proveedores", "Proveedores", "General"],
   ["multas", "Multas (Anexo III)", "General"], ["configuracion", "Tareas, justificaciones y correos", "General"], ["eventos", "Avisos por evento", "General"],
   ["motivos_otra", "Motivos de «Otra detención»", "General"],
-  ["comb_modelos", "Rendimiento por marca, modelo y año", "Combustible"], ["comb_patentes", "Rendimiento y tope por patente", "Combustible"], ["comb_motivos", "Motivos de km adicionales", "Combustible"],
+  ["comb_kmno", "Multa por km no operativos", "Combustible"], ["comb_modelos", "Rendimiento por marca, modelo y año", "Combustible"], ["comb_patentes", "Rendimiento y tope por patente", "Combustible"], ["comb_motivos", "Motivos de km adicionales", "Combustible"],
   ["talleres", "Talleres", "Mantenciones"], ["pautas", "Pautas por modelo", "Mantenciones"], ["vidamod", "Vida útil por modelo", "Mantenciones"],
   ["aud_form", "Formularios de auditoría", "Auditorías"], ["aud_tipos", "Tipos de auditoría", "Auditorías"], ["feriados", "Feriados", "Auditorías"],
   ["fleetup", "Alertas de cámara (español)", "GPS y bitácora"], ["bit_ind", "Indicadores de la bitácora", "GPS y bitácora"],
@@ -5611,6 +5689,7 @@ function MantenedorCA({ vista, quien, rol }) {
     case "motivos_otra": return <MantMotivosOtraDet quien={quien} />;
     case "comb_patentes": return <MantCombPatentes quien={quien} />;
     case "comb_modelos": return <MantCombModelos quien={quien} />;
+    case "comb_kmno": return <MantKmNo quien={quien} />;
     case "comb_motivos": return <MantCombMotivos quien={quien} />;
     case "talleres": return <TalleresMnt quien={quien} />;
     case "pautas": return <PautasMnt quien={quien} />;
