@@ -10,6 +10,7 @@ import ModuloEmpresas from "./Empresas";
 import ModuloAuditoriaMeli from "./AuditoriaMeli";
 import { sb, BIGGY_IMG } from "./shared";
 import { ShellBrain } from "./shared/shell";
+import { useAccesosCL, CampanaAvisosCL } from "./cl/AccesosAvisos";
 import { registrarSubtabs, useSubtab } from "./shared/subtabs";
 import ModuloPoolMeliMX from "./Pool";
 import { descargarExcelMeli, descargarExcelMultihoja } from "./shared";
@@ -8877,6 +8878,8 @@ export default function App() {
   // ya iniciada, handleLogin no vuelve a correr y el perfil quedaría vacío.
   useEffect(() => { fijarPerfilGlobal(usuario); }, [usuario]);
 
+  // B-06 (pedido 25-11): en Chile, qué módulos y subpestañas ve cada usuario sale del mantenedor de accesos.
+  const accesosCL = useAccesosCL(usuario, pais);
   const handleLogin = (u) => {
     localStorage.setItem("bt_usuario", JSON.stringify(u));
     fijarPerfilGlobal(u);
@@ -8905,14 +8908,20 @@ export default function App() {
   if (!usuario) return <><style>{css}</style><Login onLogin={handleLogin} /></>;
   if (!pais) return <><style>{css}</style><SelectorPais usuario={usuario} onSelect={handleSelectPais} onLogout={handleLogout} /></>;
 
-  const mods = modulosVisibles(pais, usuario.rol);
+  const modsCodigo = modulosVisibles(pais, usuario.rol);
+  // Chile: si el usuario tiene filas en el mantenedor, manda el mantenedor (solo módulos conocidos de Chile); si no, el código
+  const mods = pais === "Chile" && accesosCL && Array.isArray(accesosCL.modulos)
+    ? MODULOS_POR_PAIS.Chile.superadmin.filter((k) => accesosCL.modulos.includes(k))
+    : modsCodigo;
   const tabActivo = mods.includes(tab) ? tab : (mods[0] || null);
   const paisCfg = PAIS_SELECT_CFG[pais] || null;
   return (
     <>
       <style>{css}</style>
       <ShellBrain pais={pais} paisCode={paisCfg?.code} usuario={usuario} mods={mods} labels={MODULOS_LABELS}
-        tab={tabActivo} onTab={setTab} onCambiarPais={cambiarPais} onLogout={handleLogout}>
+        tab={tabActivo} onTab={setTab} onCambiarPais={cambiarPais} onLogout={handleLogout}
+        ocultas={pais === "Chile" && accesosCL ? accesosCL.ocultas : null}
+        extra={pais === "Chile" ? <CampanaAvisosCL usuario={usuario} onIr={(m) => { if (mods.includes(m)) setTab(m); }} /> : null}>
         {tabActivo === "pool_meli_mx" && <ModuloPoolMeliMX usuario={usuario} />}
         {tabActivo === "certificaciones" && <ModuloCertificacionesMadre />}
         {tabActivo === "empresas" && <ModuloEmpresas />}
