@@ -553,6 +553,27 @@ ${firmaB("V°B° Supervisor", [["Nombre", f.sup_nombre], ["CECO", f.sup_ceco], [
   w.document.write(html); w.document.close();
 }
 
+// PR-01 · Cuánto acierta Biggy en los hallazgos y el interruptor del modo automático (nunca se activa solo)
+function AudPrecision({ quien }) {
+  const [p, setP] = useState(null);
+  const cargar = () => api("vw_aud_precision_cl?select=*").then((r) => setP((r || [])[0] || null)).catch(() => setP(null));
+  useEffect(() => { cargar(); }, []);
+  if (!p) return <span />;
+  const listo = p.revisiones >= p.n_requerido && Number(p.precision) >= Number(p.umbral);
+  const auto = p.modo_auto === "si";
+  const cambiar = async () => {
+    if (!auto && !window.confirm(`Biggy enviará los hallazgos solo, sin tu revisión. Acierta ${p.precision}% de las últimas ${p.revisiones}. ¿Activar?`)) return;
+    try { await rpc("fn_ca_mantenedor_guardar", { p_tabla: "ca_config_cl", p_clave: "hallazgo_auto", p_campo: "valor", p_valor: auto ? "no" : "si", p_por: quien }); cargar(); } catch (e) { alert(e.message); }
+  };
+  return (
+    <div style={{ fontSize: 12.5, color: C.suave, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+      <span>🤖 Hallazgos: Biggy acierta <b style={{ color: listo ? C.verde : C.texto }}>{p.precision ?? "—"}%</b> de las últimas {p.revisiones} revisiones (se necesitan {p.n_requerido} con {p.umbral}%).</span>
+      {auto ? <button style={{ ...btn("sec"), padding: "3px 10px" }} onClick={cambiar}>Modo automático ACTIVO · desactivar</button>
+        : <button style={{ ...btn("sec"), padding: "3px 10px" }} disabled={!listo} title={listo ? "" : "Se habilita cuando Biggy alcance la precisión requerida"} onClick={cambiar}>Activar modo automático</button>}
+    </div>
+  );
+}
+
 function AudBandeja({ quien }) {
   const [acta, setActa] = useState(null);         // id de la solicitud con el acta abierta
   const [filas, setFilas] = useState(null);
@@ -560,10 +581,14 @@ function AudBandeja({ quien }) {
   const [justifican, setJustifican] = useState([]);
   const [f, setF] = useState({ tipo: "", estado: "", texto: "", desde: "", hasta: "" });
   const [busy, setBusy] = useState(false);
+  const [sol, setSol] = useState(null);           // formulario «Solicitar auditoría»: { patente, subtipo, horas, motivo }
+  const [vehs, setVehs] = useState([]);
+  const [solMsg, setSolMsg] = useState("");
   const cargar = () => api("vw_aud_bandeja_cl?select=*&order=vence_at.desc&limit=5000").then(setFilas).catch(() => setFilas([]));
   useEffect(() => {
     cargar();
-    api("ca_auditoria_subtipos_cl?select=codigo,nombre&order=orden").then(setTipos).catch(() => {});
+    api("ca_auditoria_subtipos_cl?select=codigo,nombre,plazo_horas&order=orden").then(setTipos).catch(() => {});
+    api("portal_vehiculos_cl?select=patente,empresa,ceco,estado&order=patente&limit=5000").then(setVehs).catch(() => {});
     api("ca_config_cl?clave=eq.aud_justifican&select=valor").then((r) => setJustifican(String(r?.[0]?.valor || "").toLowerCase().split(",").map((x) => x.trim()).filter(Boolean))).catch(() => {});
   }, []);
   if (acta) return <ActaEntrega solicitud={acta} quien={quien} onCerrar={() => { setActa(null); cargar(); }} />;
@@ -581,7 +606,7 @@ function AudBandeja({ quien }) {
   const vis = filas.filter((x) => (!f.tipo || x.subtipo === f.tipo) && (!f.estado || x.estado === f.estado) && enPeriodo(x.vence_at || x.creada_at, f)
     && (!f.texto || `${x.patente} ${x.empresa || ""} ${x.ceco || ""} ${x.hecha_por_nombre || ""}`.toLowerCase().includes(f.texto.toLowerCase())));
   const puedeJustificar = justifican.includes(String(quien || "").toLowerCase());
-  const origen = (x) => x.origen === "automatica" ? `Agendada automática · ${x.subtipo === "limpieza" ? "lunes" : "día 1"}${x.periodo ? " " + x.periodo : ""}` : `Por evento${x.referencia ? " · " + x.referencia : x.motivo ? " · " + x.motivo : ""}`;
+  const origen = (x) => x.origen === "manual" ? `Solicitada a mano${x.motivo ? " · " + x.motivo : ""}` : x.origen === "automatica" ? `Agendada automática · ${x.subtipo === "limpieza" ? "lunes" : "día 1"}${x.periodo ? " " + x.periodo : ""}` : `Por evento${x.referencia ? " · " + x.referencia : x.motivo ? " · " + x.motivo : ""}`;
   const plazo = (x) => {
     if (!x.vence_at) return "—";
     const d = diaDe(x.vence_at), dm = d.slice(8, 10) + "-" + d.slice(5, 7);
@@ -597,6 +622,54 @@ function AudBandeja({ quien }) {
   const celda = { padding: "7px 9px", borderBottom: `1px solid ${C.borde}`, fontSize: 12.5, verticalAlign: "top" };
   return (
     <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 8 }}>
+        <AudPrecision quien={quien} />
+        {!sol && <button style={btn()} onClick={() => { setSol({ patente: "", subtipo: "", horas: "", motivo: "" }); setSolMsg(""); }}>+ Solicitar auditoría</button>}
+      </div>
+      {sol && (() => {
+        const vehSol = vehs.find((v) => v.patente === String(sol.patente || "").toUpperCase().replace(/[^A-Z0-9]/g, ""));
+        const solicitar = async () => {
+          setSolMsg("");
+          if (!vehSol) { setSolMsg("Elige una patente de la lista."); return; }
+          if (!sol.subtipo) { setSolMsg("Elige el tipo de auditoría."); return; }
+          if (!String(sol.motivo || "").trim()) { setSolMsg("El motivo es obligatorio."); return; }
+          setBusy(true);
+          try {
+            await rpc("fn_aud_solicitar", { p_patente: vehSol.patente, p_subtipo: sol.subtipo, p_horas: Number(sol.horas) || null, p_motivo: sol.motivo.trim(), p_por: quien });
+            setSolMsg(`✓ Auditoría solicitada a ${vehSol.patente} (${vehSol.empresa || "sin empresa"}). Ya la ve en su portal.`); setSol(null); await cargar();
+          } catch (e) { setSolMsg(e.message); } finally { setBusy(false); }
+        };
+        return (
+          <div style={{ background: "#fff", border: `1px solid ${C.navy}`, borderRadius: 12, padding: 14, marginBottom: 12 }}>
+            <div style={{ fontWeight: 800, color: C.navy, marginBottom: 8 }}>Solicitar auditoría</div>
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end" }}>
+              <label style={{ fontSize: 12, color: C.suave }}>Patente<br />
+                <input list="aud-sol-patentes" style={{ ...inp, width: 130, textTransform: "uppercase" }} value={sol.patente} onChange={(e) => setSol({ ...sol, patente: e.target.value })} placeholder="TWGC52" />
+                <datalist id="aud-sol-patentes">{vehs.map((v) => <option key={v.patente} value={v.patente}>{v.empresa || ""} · {v.ceco || ""}</option>)}</datalist>
+              </label>
+              <label style={{ fontSize: 12, color: C.suave }}>Tipo<br />
+                <select style={{ ...inp, minWidth: 200 }} value={sol.subtipo} onChange={(e) => { const t = tipos.find((x) => x.codigo === e.target.value); setSol({ ...sol, subtipo: e.target.value, horas: t?.plazo_horas || "" }); }}>
+                  <option value="">Elegir…</option>{tipos.map((t) => <option key={t.codigo} value={t.codigo}>{t.nombre}</option>)}
+                </select>
+              </label>
+              <label style={{ fontSize: 12, color: C.suave }}>Plazo (horas)<br />
+                <input type="number" min="1" style={{ ...inp, width: 90 }} value={sol.horas} onChange={(e) => setSol({ ...sol, horas: e.target.value })} />
+              </label>
+              <label style={{ fontSize: 12, color: C.suave, flex: "1 1 260px" }}>Motivo (obligatorio)<br />
+                <input style={{ ...inp, width: "100%", boxSizing: "border-box" }} value={sol.motivo} onChange={(e) => setSol({ ...sol, motivo: e.target.value })} placeholder="Ej.: revisión por daño informado por el supervisor" />
+              </label>
+              <button style={btn()} disabled={busy} onClick={solicitar}>{busy ? "Solicitando…" : "Solicitar"}</button>
+              <button style={btn("sec")} onClick={() => { setSol(null); setSolMsg(""); }}>Cancelar</button>
+            </div>
+            <div style={{ fontSize: 12.5, marginTop: 8, color: vehSol ? C.texto : C.tenue }}>
+              {vehSol ? <>Empresa: <b>{vehSol.empresa || "—"}</b> · CECO: <b>{vehSol.ceco || "—"}</b>{vehSol.estado && vehSol.estado !== "ACTIVA" ? <span style={{ color: C.ambar }}> · Estado: {vehSol.estado}</span> : null}</> : "Escribe la patente y elígela de la lista."}
+              {sol.horas ? <> · Vence en {sol.horas} h ({new Date(Date.now() + Number(sol.horas) * 3600e3).toLocaleString("es-CL", { timeZone: "America/Santiago", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })})</> : null}
+            </div>
+            <div style={{ fontSize: 11.5, color: C.tenue, marginTop: 4 }}>La empresa la ve en su portal (Cuidado de Activo › Auditorías) y el supervisor del CECO en su bitácora. Solicitarla no envía correos ni WhatsApp.</div>
+          </div>
+        );
+      })()}
+      {solMsg && <div style={{ fontSize: 12.5, marginBottom: 10, color: solMsg.startsWith("✓") ? C.verde : C.rojo }}>{solMsg}</div>}
       <div style={{ fontSize: 12.5, color: C.suave, marginBottom: 10 }}>Bandeja del día: las limpiezas se crean solas cada lunes (o el primer día hábil) y las programadas el día 1 (ventana del 1 al 5). La misma bandeja la ven el transportista en su portal (para realizarlas) y el supervisor en su bitácora (seguimiento).</div>
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
         {kpis.map(([t, v, c, fn]) => <div key={t} onClick={fn} style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, padding: "10px 14px", flex: "1 1 140px", cursor: "pointer" }}><div style={{ fontSize: 22, fontWeight: 800, color: c }}>{v}</div><div style={{ fontSize: 11.5, color: C.suave }}>{t}</div></div>)}
@@ -1342,6 +1415,8 @@ function DetalleAuditoria({ a, quien, onListo }) {
   const [d, setD] = useState(null);
   const [urls, setUrls] = useState({});
   const [rehacer, setRehacer] = useState({});
+  const [evid, setEvid] = useState({});          // PR-01: fotos de la auditoría elegidas como evidencia del hallazgo
+  const [extras, setExtras] = useState([]);      // PR-01: archivos que sube Cuidado de Activo como evidencia
   const [nota, setNota] = useState("");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
@@ -1359,7 +1434,18 @@ function DetalleAuditoria({ a, quien, onListo }) {
   const veredicto = async (v) => {
     setBusy(true); setMsg("");
     try {
-      await rpc("fn_ca_auditoria_veredicto", { p_id: a.id, p_veredicto: v, p_nota: nota || null, p_rehacer: Object.keys(rehacer).filter((k) => rehacer[k]), p_por: quien });
+      let evidencias = [];
+      if (v === "cumple_hallazgo") {
+        evidencias = (d.fotos || []).filter((x) => evid[x.item] && x.path).map((x) => ({ bucket: "ca-auditorias-cl", path: x.path, nombre: x.nombre }));
+        for (const f of extras) {
+          const limpio = String(f.name || "evidencia").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^A-Za-z0-9._-]+/g, "_").slice(-80);
+          const path = `hal/${a.id}/${Date.now()}_${limpio}`;
+          const r = await fetch(`${CL_URL}/storage/v1/object/ca-hallazgos-cl/${path}`, { method: "POST", headers: { apikey: CL_KEY, Authorization: `Bearer ${CL_KEY}`, "Content-Type": f.type || "application/octet-stream" }, body: f });
+          if (!r.ok) throw new Error(`No se pudo subir ${f.name}: ${(await r.text()).slice(0, 120)}`);
+          evidencias.push({ bucket: "ca-hallazgos-cl", path, nombre: f.name });
+        }
+      }
+      await rpc("fn_ca_auditoria_veredicto2", { p_id: a.id, p_veredicto: v, p_nota: nota || null, p_rehacer: Object.keys(rehacer).filter((k) => rehacer[k]), p_evidencias: evidencias, p_por: quien });
       onListo();
     } catch (e) { setMsg(e.message); } finally { setBusy(false); }
   };
@@ -1400,6 +1486,9 @@ function DetalleAuditoria({ a, quien, onListo }) {
                 <label style={{ display: "flex", gap: 6, alignItems: "center", cursor: "pointer", color: C.rojo, fontWeight: 700 }}>
                   <input type="checkbox" checked={!!rehacer[x.item]} onChange={(e) => setRehacer({ ...rehacer, [x.item]: e.target.checked })} /> Repetir
                 </label>
+                {x.path && <label style={{ display: "flex", gap: 6, alignItems: "center", cursor: "pointer", color: C.ambar, fontWeight: 700 }} title="Se adjunta a la tarea del supervisor si envías el hallazgo">
+                  <input type="checkbox" checked={!!evid[x.item]} onChange={(e) => setEvid({ ...evid, [x.item]: e.target.checked })} /> Evidencia
+                </label>}
                 {x.lat && x.lng && <a href={`https://maps.google.com/?q=${x.lat},${x.lng}`} target="_blank" rel="noreferrer" style={{ color: C.navy }}>🗺️ Dónde se tomó</a>}
               </div>
             </div>
@@ -1434,14 +1523,29 @@ function DetalleAuditoria({ a, quien, onListo }) {
 
       {a.veredicto && <div style={{ fontSize: 13, marginTop: 12 }}><b>Veredicto:</b> {AU_VER[a.veredicto]}{a.revision_nota ? ` · ${a.revision_nota}` : ""} <span style={{ color: C.tenue }}>({a.revisada_por}, {fh(a.revisada_at)})</span></div>}
 
+      {(() => {   // PR-01: propuesta de Biggy (para que Maycol decida y Biggy aprenda)
+        const b = a.biggy || {}, prop = b.propuesta === "revisar" || b.falla_obs || a.amerita_reparacion ? "hallazgo" : b.propuesta === "aprobada" ? "sin" : null;
+        if (!prop) return null;
+        return <div style={{ marginTop: 14, background: prop === "hallazgo" ? C.ambarT : C.verdeT, border: `1px solid ${prop === "hallazgo" ? C.ambar : C.verde}`, borderRadius: 10, padding: "8px 12px", fontSize: 13 }}>
+          <b>🤖 Biggy propone: {prop === "hallazgo" ? "enviar hallazgo" : "sin hallazgo"}</b>{b.resumen ? ` · ${b.resumen}` : ""}{b.falla_obs?.resumen ? ` · Falla en la observación: ${b.falla_obs.resumen}` : ""}
+          <div style={{ fontSize: 11.5, color: C.suave, marginTop: 2 }}>Tu decisión le enseña a Biggy. Escribe en el comentario por qué, sobre todo si no estás de acuerdo.</div>
+        </div>;
+      })()}
       <div style={{ marginTop: 14 }}>
         <textarea rows={2} style={{ ...inp, width: "100%" }} value={nota} onChange={(e) => setNota(e.target.value)}
-          placeholder="Motivo para el transportista (si no cumple) o descripción del hallazgo" />
-        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6, alignItems: "center" }}>
-          <button style={btn("verde")} disabled={busy} onClick={() => veredicto("cumple")}>Cumple</button>
-          <button style={{ ...btn(), background: C.ambar }} disabled={busy} onClick={() => { if (window.confirm("Se crea una tarea de hallazgo al supervisor (48 h) y se le avisa por correo según el modo de correos (en prueba solo te llega a ti). ¿Seguir?")) veredicto("cumple_hallazgo"); }}>Cumple con hallazgo</button>
+          placeholder="Comentario del hallazgo (llega a la tarea del supervisor) o motivo para el transportista si no cumple" />
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginTop: 6, fontSize: 12.5 }}>
+          <label style={{ ...btn("sec"), cursor: "pointer", padding: "4px 10px" }}>📎 Agregar evidencias (opcional)
+            <input type="file" multiple accept="image/*,application/pdf" style={{ display: "none" }} onChange={(e) => { setExtras([...extras, ...Array.from(e.target.files || [])]); e.target.value = ""; }} />
+          </label>
+          {extras.map((f, i) => <span key={i} style={{ background: C.fondo, borderRadius: 12, padding: "2px 8px" }}>{f.name} <a style={{ cursor: "pointer", color: C.rojo }} onClick={() => setExtras(extras.filter((_, j) => j !== i))}>✕</a></span>)}
+          <span style={{ color: C.tenue }}>{Object.values(evid).filter(Boolean).length} foto(s) de la auditoría marcadas como evidencia</span>
+        </div>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8, alignItems: "center" }}>
+          <button style={btn("verde")} disabled={busy} onClick={() => veredicto("cumple")}>Sin hallazgo (cumple)</button>
+          <button style={{ ...btn(), background: C.ambar }} disabled={busy} onClick={() => { if (!nota.trim()) { setMsg("Escribe el comentario del hallazgo: es lo que llega al supervisor."); return; } if (window.confirm("Se envía el hallazgo: tarea al supervisor con 24 h (con tu comentario y las evidencias) y solicitud en Reparaciones. ¿Enviar?")) veredicto("cumple_hallazgo"); }}>Enviar hallazgo</button>
           <button style={btn("rojo")} disabled={busy} onClick={() => veredicto("no_cumple")}>No cumple · repetir {marcadas} foto{marcadas === 1 ? "" : "s"}</button>
-          <span style={{ fontSize: 12, color: C.tenue }}>Si no cumple, el tercero ve en su portal qué fotos repetir (sin correo). Con hallazgo se crea la tarea al supervisor.</span>
+          <span style={{ fontSize: 12, color: C.tenue }}>Si no cumple, el tercero ve en su portal qué fotos repetir. Enviar hallazgo crea la tarea al supervisor (24 h) y la solicitud en Reparaciones.</span>
         </div>
         {msg && <div style={{ color: C.rojo, fontSize: 13, marginTop: 8 }}>{msg}</div>}
       </div>
@@ -4692,7 +4796,7 @@ function MediaWa({ m }) {
   if (!m.media_path) return <div style={{ fontSize: 12.5, color: C.suave, fontStyle: CON_ARCHIVO.has(m.tipo) ? "normal" : "italic" }}>{MEDIA[m.tipo] || `Mensaje de tipo «${m.tipo}»`}{CON_ARCHIVO.has(m.tipo) && m.media_id ? " (guardándose…)" : ""}</div>;
   if (!url) return <div style={{ fontSize: 12, color: C.tenue }}>Cargando {(MEDIA[m.tipo] || "archivo").toLowerCase()}…</div>;
   if (m.tipo === "image" || m.tipo === "sticker") return <a href={url} target="_blank" rel="noreferrer"><img src={url} alt="foto" style={{ maxWidth: 260, maxHeight: 260, borderRadius: 8, display: "block" }} /></a>;
-  if (m.tipo === "audio") return <audio controls src={url} style={{ maxWidth: 260 }} />;
+  if (m.tipo === "audio") return <div><audio controls src={url} style={{ maxWidth: 260 }} />{m.transcripcion && <div style={{ fontSize: 12.5, color: C.suave, fontStyle: "italic", marginTop: 3, maxWidth: 300 }}>«{m.transcripcion}»</div>}</div>;
   if (m.tipo === "video") return <video controls src={url} style={{ maxWidth: 280, borderRadius: 8 }} />;
   return <a href={url} target="_blank" rel="noreferrer" style={{ color: C.navy, fontWeight: 700, fontSize: 13 }}>📄 {m.media_nombre || "Documento"}</a>;
 }
@@ -4718,7 +4822,7 @@ function ChatWhatsApp({ quien }) {
     try {
       const [cv, um, ct] = await Promise.all([
         api("ca_ag_conversaciones_cl?select=*&order=ultimo_msg_at.desc&limit=300"),
-        api("ca_ag_mensajes_cl?select=conversacion_id,texto,tipo,autor,direccion,creado_at&order=id.desc&limit=600"),
+        api("ca_ag_mensajes_cl?select=conversacion_id,texto,tipo,autor,direccion,creado_at,transcripcion&order=id.desc&limit=600"),
         api("ca_wa_contactos_cl?select=id,tipo,nombre,empresa,cecos,taller,telefono,rut,correo,marcha_blanca"),
       ]);
       const u = {}; for (const m of um || []) if (!u[m.conversacion_id]) u[m.conversacion_id] = m;
@@ -4818,7 +4922,7 @@ function ChatWhatsApp({ quien }) {
                   <b style={{ fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{nl && <span style={{ color: C.rojo }}>● </span>}{x.nombre || "+" + x.telefono}</b>
                   <span style={{ fontSize: 11, color: C.tenue, whiteSpace: "nowrap" }}>{horaCL(x.ultimo_msg_at)}</span>
                 </div>
-                <div style={{ fontSize: 12, color: C.suave, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{u ? `${u.autor === "persona" ? "" : u.autor === "agente" ? "Biggy: " : "Tú: "}${u.texto || MEDIA[u.tipo] || ""}` : ""}</div>
+                <div style={{ fontSize: 12, color: C.suave, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{u ? `${u.autor === "persona" ? "" : u.autor === "agente" ? "Biggy: " : "Tú: "}${u.texto || (u.transcripcion ? `🎤 ${u.transcripcion}` : MEDIA[u.tipo]) || ""}` : ""}</div>
                 <div style={{ display: "flex", gap: 4, marginTop: 3, flexWrap: "wrap" }}>
                   {chip(e[0], e[1], e[2])}{x.prioridad === "urgente" && x.estado !== "cerrada" && chip("URGENTE", C.rojoT, C.rojo)}
                   {x.tipo && <span style={{ fontSize: 11, color: C.tenue }}>{AG_TIPO[x.tipo] || x.tipo}</span>}{x.motivo && <span style={{ fontSize: 11, color: C.tenue }}>· {x.motivo}</span>}

@@ -86,7 +86,7 @@ const CSS = `
 .mj-chip:hover{border-color:${NAVY};color:${NAVY};}
 `;
 
-const MAESTRO_MANT = [["glosario", "📖 Glosario del Maestro"], ["cecos", "🏢 CECO y centros MELI"], ["dt", "🚚 Clientes DispatchTrack"], ["reemplazos", "↺ Reemplazos"], ["supervisores", "👤 Supervisores y CECO"], ["lideres", "👥 Líderes y supervisores"], ["colectas", "📦 Centros de colecta"],
+const MAESTRO_MANT = [["vehiculos", "🚐 Vehículos (maestro único)"], ["empresas", "🏢 Empresas (terceros)"], ["sites", "📍 Sites de carga"], ["glosario", "📖 Glosario del Maestro"], ["cecos", "🏢 CECO y centros MELI"], ["dt", "🚚 Clientes DispatchTrack"], ["reemplazos", "↺ Reemplazos"], ["supervisores", "👤 Supervisores y CECO"], ["lideres", "👥 Líderes y supervisores"], ["colectas", "📦 Centros de colecta"],
   ["justif", "⚖️ Justificación de devoluciones"], ["hitos", "💲 Pago de hitos"], ["categorias", "🏷️ Categorías de observación"]];
 
 export default function ModuloMantenedorCL({ usuario } = {}) {
@@ -115,6 +115,9 @@ export default function ModuloMantenedorCL({ usuario } = {}) {
           </div>
         ))}
       </div>
+      {vista === "vehiculos" && <Vehiculos quien={quien} usuario={usuario} />}
+      {vista === "sites" && <Sites quien={quien} usuario={usuario} />}
+      {vista === "empresas" && <Empresas quien={quien} usuario={usuario} />}
       {vista === "glosario" && <Glosario />}
       {vista === "cecos" && <CecosCentros quien={quien} />}
       {vista === "dt" && <ClientesDT quien={quien} />}
@@ -136,6 +139,273 @@ export default function ModuloMantenedorCL({ usuario } = {}) {
 }
 
 // ── Reemplazos ─────────────────────────────────────────────────────────────
+// ═══ V-01 · Mantenedor único de vehículos (Ajustes del 25-11) ═══
+// Fuente única: ca_activos_cl. Al guardar alimenta el portal de terceros, el Maestro (operación y Vehículos BT) y
+// Cuidado de Activo. El «tipo para tarifa» solo cambia Vehículos BT si se cambia a propósito (con aviso).
+// Editan Cuidado de Activo (veh_editores) y superadmin; el resto solo ve. Cada cambio queda con quién y cuándo.
+const VEH_ESTADOS = ["ACTIVO", "INACTIVO", "VENDIDO", "SINIESTRADO", "DEVUELTO"];
+const VEH_TARIFAS = ["COMBUSTION", "ELECTRICA", "BIG VAN", "COMBUSTION LARGE VAN"];
+const VEH_CAMPOS = [
+  ["Operación", [["ceco", "CECO"], ["site", "Site de carga", "site"], ["estado", "Status", "estado"], ["estado_motivo", "Motivo del status"]]],
+  ["Vehículo", [["tipo_vehiculo", "Tipo (camioneta, camión…)"], ["energia", "Energía", "energia"], ["tipo_tarifa", "Tipo para tarifa", "tarifa"], ["marca", "Marca"], ["modelo", "Modelo"], ["anio", "Año", "num"], ["color", "Color"], ["vin", "Chasis o VIN"], ["motor", "Motor"], ["valor_compra", "Valor de compra", "num"]]],
+  ["Empresa (tercero)", [["empresa", "Empresa", "empresa"], ["rut_empresa", "RUT empresa"], ["propietario", "Propietario (padrón)"], ["propietario_rut", "RUT propietario"]]],
+  ["Estacionamiento y traslado", [["direccion_estacionamiento", "Dirección de estacionamiento", "largo"], ["km_domicilio_site", "Km domicilio–site (solo ida)", "num"]]],
+  ["Documentos", [["soap_vence", "SOAP vence", "fecha"], ["rt_vence", "Revisión técnica vence", "fecha"], ["permiso_vence", "Permiso de circulación vence", "fecha"]]],
+  ["Seguro y leasing", [["seguro_proveedor", "Aseguradora"], ["seguro_poliza", "Póliza"], ["seguro_vence", "Seguro vence", "fecha"], ["leasing_banco", "Banco leasing"], ["leasing_vence", "Leasing vence", "fecha"]]],
+  ["Otros", [["observacion", "Observación", "largo"]]],
+];
+function puedeEditarVeh(usuario, editores) {
+  if (!usuario) return false;
+  if (usuario.rol === "superadmin") return true;
+  const mail = String(usuario.email || "").toLowerCase();
+  return !!mail && String(editores || "").toLowerCase().split(",").map((x) => x.trim()).includes(mail);
+}
+function Vehiculos({ quien, usuario }) {
+  const [filas, setFilas] = useState(null);
+  const [sites, setSites] = useState([]);
+  const [empresas, setEmpresas] = useState([]);
+  const [editores, setEditores] = useState("");
+  const [f, setF] = useState({ texto: "", estado: "ACTIVO", ceco: "", falta: "" });
+  const [ed, setEd] = useState(null);         // { nuevo, orig, datos }
+  const [hist, setHist] = useState(null);
+  const [msg, setMsg] = useState("");
+  const [busy, setBusy] = useState(false);
+  const cargar = async () => {
+    const [v, s, e, c] = await Promise.all([
+      apiSuave("ca_activos_cl?select=*&order=patente&limit=3000", []),
+      apiSuave("ca_sites_cl?select=*&order=codigo", []),
+      apiSuave("portal_empresas_cl?select=*&limit=2000", []),
+      apiSuave("ca_config_cl?clave=eq.veh_editores&select=valor", []),
+    ]);
+    setFilas(v || []); setSites(s || []); setEmpresas(e || []); setEditores((c || [])[0]?.valor || "");
+  };
+  useEffect(() => { cargar(); }, []);
+  if (filas === null) return <div className="mt-card">Cargando vehículos…</div>;
+  const puede = puedeEditarVeh(usuario, editores);
+  const cecos = [...new Set(filas.map((x) => x.ceco).filter(Boolean))].sort();
+  const nomEmp = (x) => x.razon_social || x.empresa || x.nombre || "";
+  const rutEmp = (x) => x.rut || x.rut_empresa || "";
+  const vis = filas.filter((x) => (f.estado === "TODOS" || (f.estado === "ACTIVO" ? (x.estado || "ACTIVO").toUpperCase() === "ACTIVO" : (x.estado || "ACTIVO").toUpperCase() !== "ACTIVO"))
+    && (!f.ceco || (f.ceco === "__sin" ? !x.ceco : x.ceco === f.ceco))
+    && (!f.falta || (f.falta === "dir" ? !x.direccion_estacionamiento : f.falta === "site" ? !x.site : f.falta === "km" ? x.km_domicilio_site === null || x.km_domicilio_site === undefined : f.falta === "empresa" ? !x.rut_empresa : !x.tipo_tarifa))
+    && (!f.texto || `${x.patente} ${x.empresa || ""} ${x.marca || ""} ${x.modelo || ""} ${x.ceco || ""} ${x.direccion_estacionamiento || ""}`.toLowerCase().includes(f.texto.toLowerCase())));
+  const abrir = (x) => { setMsg(""); setHist(null); setEd({ nuevo: !x, orig: x || {}, datos: x ? { ...x } : { patente: "", estado: "ACTIVO" } }); };
+  const guardar = async () => {
+    const d = ed.datos, o = ed.orig, cambios = {};
+    const pat = String(d.patente || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+    if (ed.nuevo && pat.length < 5) { setMsg("Escribe una patente válida."); return; }
+    if (ed.nuevo && filas.some((x) => x.patente === pat)) { setMsg(`La ${pat} ya existe: búscala en la lista.`); return; }
+    VEH_CAMPOS.forEach(([, cs]) => cs.forEach(([k, , t]) => {
+      let v = d[k]; if (v === "") v = null;
+      if ((t === "num") && v !== null && v !== undefined) v = Number(String(v).replace(",", "."));
+      if ((o[k] ?? null) !== (v ?? null)) cambios[k] = v ?? null;
+    }));
+    if (!ed.nuevo && !Object.keys(cambios).length) { setMsg("No hay cambios."); return; }
+    if (!ed.nuevo && "tipo_tarifa" in cambios && o.tipo_tarifa && !window.confirm(`Cambiar el tipo para tarifa de ${o.tipo_tarifa} a ${cambios.tipo_tarifa || "(vacío)"} cambia cómo se le paga a esta patente en el Maestro (Vehículos BT). ¿Continuar?`)) return;
+    setBusy(true); setMsg("");
+    try { await rpc("fn_ca_vehiculo_guardar", { p_patente: ed.nuevo ? pat : o.patente, p_datos: cambios, p_por: quien }); setMsg(`✓ ${ed.nuevo ? pat + " agregado" : o.patente + " guardado"}`); setEd(null); await cargar(); }
+    catch (e) { setMsg("No se pudo guardar: " + e.message); } finally { setBusy(false); }
+  };
+  const verHist = async (pat) => setHist(await apiSuave(`ca_activos_hist_cl?patente=eq.${encodeURIComponent(pat)}&order=at.desc&limit=80`, []));
+  const campo = (k, lbl, t) => {
+    const v = ed.datos[k] ?? "", set = (val) => setEd({ ...ed, datos: { ...ed.datos, [k]: val } });
+    const dis = !puede;
+    let input;
+    if (t === "estado") input = <select className="mt-in" disabled={dis} value={v || "ACTIVO"} onChange={(e) => set(e.target.value)}>{VEH_ESTADOS.map((x) => <option key={x}>{x}</option>)}</select>;
+    else if (t === "energia") input = <select className="mt-in" disabled={dis} value={v} onChange={(e) => set(e.target.value)}><option value="">—</option><option>COMBUSTION</option><option>ELECTRICA</option></select>;
+    else if (t === "tarifa") input = <select className="mt-in" disabled={dis} value={v} onChange={(e) => set(e.target.value)}><option value="">—</option>{VEH_TARIFAS.map((x) => <option key={x}>{x}</option>)}</select>;
+    else if (t === "site") input = <select className="mt-in" disabled={dis} value={v} onChange={(e) => set(e.target.value)}><option value="">Sin site</option>{sites.map((s) => <option key={s.codigo} value={s.codigo}>{s.codigo}{s.direccion ? ` · ${s.direccion}` : ""}</option>)}</select>;
+    else if (t === "empresa") input = <><input className="mt-in" disabled={dis} list="veh-empresas" value={v} onChange={(e) => { const emp = empresas.find((x) => nomEmp(x) === e.target.value); setEd({ ...ed, datos: { ...ed.datos, empresa: e.target.value, rut_empresa: emp ? rutEmp(emp) : ed.datos.rut_empresa } }); }} />
+      <datalist id="veh-empresas">{empresas.map((x, i) => <option key={i} value={nomEmp(x)}>{rutEmp(x)}</option>)}</datalist></>;
+    else if (t === "largo") input = <textarea className="mt-in" disabled={dis} rows={2} value={v} onChange={(e) => set(e.target.value)} style={{ resize: "vertical" }} />;
+    else input = <input className="mt-in" disabled={dis} type={t === "fecha" ? "date" : "text"} value={t === "fecha" ? String(v).slice(0, 10) : v} onChange={(e) => set(e.target.value)} />;
+    return <label key={k} className="mt-lbl" style={{ flex: t === "largo" ? "1 1 100%" : "1 1 200px" }}>{lbl}{k === "km_domicilio_site" && ed.orig.km_fuente ? <span style={{ fontWeight: 400 }}> (fuente: {ed.orig.km_fuente})</span> : null}{input}</label>;
+  };
+  const faltan = (k) => filas.filter((x) => (x.estado || "ACTIVO").toUpperCase() === "ACTIVO" && (k === "km" ? x.km_domicilio_site === null || x.km_domicilio_site === undefined : !x[k])).length;
+  return (
+    <div>
+      <div className="mt-card">
+        <div className="mt-tit">Vehículos · maestro único</div>
+        <div className="mt-sub">Una sola ficha por patente que alimenta el Maestro (Vehículos BT y operación), Cuidado de Activo y el portal de terceros. Status distinto de ACTIVO = sale de agendas, auditorías, tareas y combustible (conserva su historial). {puede ? "Puedes editar." : "Solo lectura: editan Cuidado de Activo y superadmin."}</div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end" }}>
+          <input className="mt-in" style={{ minWidth: 260 }} placeholder="Patente, empresa, marca, CECO o dirección" value={f.texto} onChange={(e) => setF({ ...f, texto: e.target.value })} />
+          <select className="mt-in" value={f.estado} onChange={(e) => setF({ ...f, estado: e.target.value })}><option value="ACTIVO">Activos</option><option value="OTROS">Inactivos, vendidos…</option><option value="TODOS">Todos</option></select>
+          <select className="mt-in" value={f.ceco} onChange={(e) => setF({ ...f, ceco: e.target.value })}><option value="">Todos los CECO</option><option value="__sin">Sin CECO</option>{cecos.map((c) => <option key={c}>{c}</option>)}</select>
+          <select className="mt-in" value={f.falta} onChange={(e) => setF({ ...f, falta: e.target.value })}>
+            <option value="">Sin filtro de datos faltantes</option>
+            <option value="dir">Sin dirección de estacionamiento ({faltan("direccion_estacionamiento")})</option>
+            <option value="site">Sin site ({faltan("site")})</option>
+            <option value="km">Sin km domicilio–site ({faltan("km")})</option>
+            <option value="empresa">Sin empresa ({faltan("rut_empresa")})</option>
+            <option value="tarifa">Sin tipo para tarifa ({faltan("tipo_tarifa")})</option>
+          </select>
+          <span style={{ flex: 1 }} />
+          {puede && <button className="mt-btn pri" onClick={() => abrir(null)}>+ Agregar vehículo</button>}
+        </div>
+        {msg && <div className="mt-msg" style={{ color: msg.startsWith("✓") ? VERDE : ROJO }}>{msg}</div>}
+      </div>
+      {ed && (
+        <div className="mt-card" style={{ borderColor: NAVY }}>
+          <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 8 }}>
+            <div className="mt-tit">{ed.nuevo ? "Agregar vehículo" : ed.orig.patente}</div>
+            {!ed.nuevo && <button className="mt-btn" onClick={() => verHist(ed.orig.patente)}>Historial de cambios</button>}
+            <span style={{ flex: 1 }} />
+            {puede && <button className="mt-btn pri" disabled={busy} onClick={guardar}>{busy ? "Guardando…" : "Guardar"}</button>}
+            <button className="mt-btn" onClick={() => { setEd(null); setHist(null); }}>Cerrar</button>
+          </div>
+          {ed.nuevo && <label className="mt-lbl" style={{ maxWidth: 200, marginBottom: 8 }}>Patente<input className="mt-in" value={ed.datos.patente} onChange={(e) => setEd({ ...ed, datos: { ...ed.datos, patente: e.target.value.toUpperCase() } })} placeholder="TWGC52" /></label>}
+          {VEH_CAMPOS.map(([g, cs]) => (
+            <div key={g} style={{ marginBottom: 10 }}>
+              <div style={{ fontSize: 11, fontWeight: 800, color: "#64748b", textTransform: "uppercase", margin: "6px 0 4px" }}>{g}</div>
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>{cs.map(([k, lbl, t]) => campo(k, lbl, t))}</div>
+            </div>
+          ))}
+          {ed.datos.km_domicilio_site !== null && ed.datos.km_domicilio_site !== undefined && ed.datos.km_domicilio_site !== "" && <div style={{ fontSize: 11.5, color: "#64748b" }}>Para combustible se usa ida y vuelta: {(Number(String(ed.datos.km_domicilio_site).replace(",", ".")) * 2).toFixed(1)} km por día con ruta.</div>}
+          {hist && <div style={{ marginTop: 10, maxHeight: 260, overflowY: "auto" }}>
+            <table className="mt-tabla"><thead><tr><th>Fecha</th><th>Campo</th><th>Antes</th><th>Después</th><th>Por</th></tr></thead>
+              <tbody>{hist.length === 0 ? <tr><td colSpan={5}>Sin cambios registrados.</td></tr> : hist.map((h) => (
+                <tr key={h.id}><td>{new Date(h.at).toLocaleString("es-CL", { timeZone: "America/Santiago" })}</td><td>{h.campo}</td><td>{h.antes ?? "—"}</td><td>{h.despues ?? "—"}</td><td>{h.por}</td></tr>))}</tbody></table>
+          </div>}
+        </div>
+      )}
+      <div className="mt-card" style={{ padding: 0, overflowX: "auto" }}>
+        <table className="mt-tabla" style={{ minWidth: 1100 }}>
+          <thead><tr><th>Patente</th><th>CECO</th><th>Site</th><th>Tipo · energía</th><th>Tarifa</th><th>Empresa</th><th>Marca · modelo · año</th><th>Status</th><th>Dirección de estacionamiento</th><th>Km ida</th><th></th></tr></thead>
+          <tbody>{vis.length === 0 ? <tr><td colSpan={11} style={{ color: "#64748b" }}>Sin vehículos con este filtro.</td></tr> : vis.map((x) => (
+            <tr key={x.patente}>
+              <td><b>{x.patente}</b></td><td>{x.ceco || <span style={{ color: AMBAR }}>sin CECO</span>}</td><td>{x.site || <span style={{ color: AMBAR }}>—</span>}</td>
+              <td>{[x.tipo_vehiculo, x.energia].filter(Boolean).join(" · ") || "—"}</td><td>{x.tipo_tarifa || <span style={{ color: AMBAR }}>—</span>}</td>
+              <td>{x.empresa || <span style={{ color: AMBAR }}>sin empresa</span>}{x.rut_empresa ? <div style={{ fontSize: 10.5, color: "#64748b" }}>{x.rut_empresa}</div> : null}</td>
+              <td>{[x.marca, x.modelo, x.anio].filter(Boolean).join(" · ") || "—"}</td>
+              <td style={{ color: (x.estado || "ACTIVO").toUpperCase() === "ACTIVO" ? VERDE : ROJO, fontWeight: 700 }}>{x.estado || "ACTIVO"}</td>
+              <td style={{ maxWidth: 260 }}>{x.direccion_estacionamiento || <span style={{ color: AMBAR }}>sin dirección</span>}</td>
+              <td>{x.km_domicilio_site ?? <span style={{ color: AMBAR }}>—</span>}</td>
+              <td><button className="mt-btn" onClick={() => abrir(x)}>{puede ? "Editar" : "Ver"}</button></td>
+            </tr>))}</tbody>
+        </table>
+      </div>
+      <div style={{ fontSize: 11.5, color: "#64748b" }}>{vis.length} de {filas.length} vehículos.</div>
+    </div>
+  );
+}
+
+// ═══ V-03 · Mantenedor de empresas (terceros) ═══
+// Sobre portal_empresas_cl (la del portal). La dirección de la empresa no es la de estacionamiento del vehículo.
+function Empresas({ quien, usuario }) {
+  const [filas, setFilas] = useState(null);
+  const [vehs, setVehs] = useState([]);
+  const [editores, setEditores] = useState("");
+  const [f, setF] = useState({ texto: "", estado: "" });
+  const [ed, setEd] = useState(null);
+  const [msg, setMsg] = useState("");
+  const [busy, setBusy] = useState(false);
+  const cargar = async () => {
+    const [e, v, c] = await Promise.all([apiSuave("portal_empresas_cl?select=*&order=empresa&limit=3000", []), apiSuave("ca_activos_cl?select=patente,rut_empresa,estado&limit=3000", []),
+      apiSuave("ca_config_cl?clave=eq.veh_editores&select=valor", [])]);
+    setFilas(e || []); setVehs(v || []); setEditores((c || [])[0]?.valor || "");
+  };
+  useEffect(() => { cargar(); }, []);
+  if (filas === null) return <div className="mt-card">Cargando empresas…</div>;
+  const puede = puedeEditarVeh(usuario, editores);
+  const norm = (r) => String(r || "").toUpperCase().replace(/[^0-9K]/g, "");
+  const nVeh = (rut) => vehs.filter((v) => norm(v.rut_empresa) === norm(rut) && (v.estado || "ACTIVO").toUpperCase() === "ACTIVO").length;
+  const estados = [...new Set(filas.map((x) => x.estado).filter(Boolean))].sort();
+  const tipos = [...new Set(filas.map((x) => x.tipo).filter(Boolean))].sort();
+  const vis = filas.filter((x) => (!f.estado || x.estado === f.estado) && (!f.texto || `${x.empresa || ""} ${x.rut || ""} ${x.contacto || ""} ${(x.cecos || []).join(" ")}`.toLowerCase().includes(f.texto.toLowerCase())));
+  const abrir = (x) => { setMsg(""); setEd({ nuevo: !x, orig: x || {}, d: x ? { ...x, cecos: (x.cecos || []).join(", "), correos: (x.correos || []).join(", ") } : { rut: "", empresa: "", estado: "ACTIVA" } }); };
+  const guardar = async () => {
+    const o = ed.orig, d = ed.d, cambios = {};
+    ["empresa", "direccion", "contacto", "telefono", "tipo", "estado", "cecos", "correos"].forEach((k) => {
+      const antes = k === "cecos" || k === "correos" ? (o[k] || []).join(", ") : (o[k] ?? ""); if (String(d[k] ?? "") !== String(antes)) cambios[k] = d[k] ?? "";
+    });
+    if (ed.nuevo && (!String(d.rut || "").trim() || !String(d.empresa || "").trim())) { setMsg("Faltan el RUT y el nombre."); return; }
+    if (!ed.nuevo && !Object.keys(cambios).length) { setMsg("No hay cambios."); return; }
+    setBusy(true); setMsg("");
+    try { await rpc("fn_empresa_guardar", { p_rut: ed.nuevo ? d.rut : o.rut, p_datos: cambios, p_por: quien }); setMsg(`✓ ${d.empresa} guardada`); setEd(null); await cargar(); }
+    catch (e) { setMsg("No se pudo guardar: " + e.message); } finally { setBusy(false); }
+  };
+  const campo = (k, lbl, opts = {}) => (
+    <label key={k} className="mt-lbl" style={{ flex: opts.largo ? "1 1 100%" : "1 1 220px" }}>{lbl}
+      {opts.lista ? <><input className="mt-in" disabled={!puede} list={`emp-${k}`} value={ed.d[k] ?? ""} onChange={(e) => setEd({ ...ed, d: { ...ed.d, [k]: e.target.value } })} /><datalist id={`emp-${k}`}>{opts.lista.map((x) => <option key={x} value={x} />)}</datalist></>
+        : <input className="mt-in" disabled={!puede || (k === "rut" && !ed.nuevo)} value={ed.d[k] ?? ""} onChange={(e) => setEd({ ...ed, d: { ...ed.d, [k]: e.target.value } })} placeholder={opts.ph || ""} />}
+    </label>);
+  return (
+    <div>
+      <div className="mt-card">
+        <div className="mt-tit">Empresas (terceros)</div>
+        <div className="mt-sub">Las empresas del portal de terceros: nombre, RUT, dirección, contacto, correos, teléfono, estado y CECO. La dirección de la empresa es distinta de la dirección de estacionamiento de cada vehículo (esa está en Vehículos). {puede ? "Puedes editar." : "Solo lectura: editan Cuidado de Activo y superadmin."}</div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <input className="mt-in" style={{ minWidth: 260 }} placeholder="Nombre, RUT, contacto o CECO" value={f.texto} onChange={(e) => setF({ ...f, texto: e.target.value })} />
+          <select className="mt-in" value={f.estado} onChange={(e) => setF({ ...f, estado: e.target.value })}><option value="">Todos los estados</option>{estados.map((x) => <option key={x}>{x}</option>)}</select>
+          <span style={{ flex: 1 }} />
+          {puede && <button className="mt-btn pri" onClick={() => abrir(null)}>+ Agregar empresa</button>}
+        </div>
+        {msg && <div className="mt-msg" style={{ color: msg.startsWith("✓") ? VERDE : ROJO }}>{msg}</div>}
+      </div>
+      {ed && (
+        <div className="mt-card" style={{ borderColor: NAVY }}>
+          <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 8 }}>
+            <div className="mt-tit">{ed.nuevo ? "Agregar empresa" : ed.orig.empresa}</div><span style={{ flex: 1 }} />
+            {puede && <button className="mt-btn pri" disabled={busy} onClick={guardar}>{busy ? "Guardando…" : "Guardar"}</button>}
+            <button className="mt-btn" onClick={() => setEd(null)}>Cerrar</button>
+          </div>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            {campo("empresa", "Nombre")}{campo("rut", "RUT", { ph: "77132162-3" })}{campo("estado", "Estado", { lista: estados.length ? estados : ["ACTIVA", "INACTIVA"] })}{campo("tipo", "Tipo", { lista: tipos })}
+            {campo("direccion", "Dirección de la empresa", { largo: true })}
+            {campo("contacto", "Contacto (representante)")}{campo("telefono", "Teléfono", { ph: "+56 9 …" })}
+            {campo("correos", "Correos (separados por coma)", { largo: true })}{campo("cecos", "CECO (separados por coma)", { largo: true })}
+          </div>
+        </div>
+      )}
+      <div className="mt-card" style={{ padding: 0, overflowX: "auto" }}>
+        <table className="mt-tabla" style={{ minWidth: 980 }}>
+          <thead><tr><th>Empresa</th><th>RUT</th><th>Estado</th><th>Contacto</th><th>Teléfono</th><th>Correos</th><th>Dirección</th><th>CECO</th><th>Vehículos activos</th><th></th></tr></thead>
+          <tbody>{vis.length === 0 ? <tr><td colSpan={10}>Sin empresas con este filtro.</td></tr> : vis.map((x) => (
+            <tr key={x.rut}><td><b>{x.empresa}</b>{x.tipo ? <div style={{ fontSize: 10.5, color: "#64748b" }}>{x.tipo}</div> : null}</td><td>{x.rut}</td><td>{x.estado || "—"}</td>
+              <td>{x.contacto || "—"}</td><td>{x.telefono || "—"}</td><td style={{ maxWidth: 200 }}>{(x.correos || []).join(", ") || "—"}</td>
+              <td style={{ maxWidth: 220 }}>{x.direccion || <span style={{ color: AMBAR }}>sin dirección</span>}</td><td>{(x.cecos || []).join(", ") || "—"}</td>
+              <td style={{ textAlign: "center" }}>{nVeh(x.rut) || "—"}</td><td><button className="mt-btn" onClick={() => abrir(x)}>{puede ? "Editar" : "Ver"}</button></td></tr>))}</tbody>
+        </table>
+      </div>
+      <div style={{ fontSize: 11.5, color: "#64748b" }}>{vis.length} de {filas.length} empresas.</div>
+    </div>
+  );
+}
+
+function Sites({ quien, usuario }) {
+  const [filas, setFilas] = useState(null);
+  const [editores, setEditores] = useState("");
+  const [n, setN] = useState({ codigo: "", direccion: "", comuna: "" });
+  const [msg, setMsg] = useState("");
+  const cargar = async () => {
+    const [s, c] = await Promise.all([apiSuave("ca_sites_cl?select=*&order=codigo", []), apiSuave("ca_config_cl?clave=eq.veh_editores&select=valor", [])]);
+    setFilas(s || []); setEditores((c || [])[0]?.valor || "");
+  };
+  useEffect(() => { cargar(); }, []);
+  if (filas === null) return <div className="mt-card">Cargando…</div>;
+  const puede = puedeEditarVeh(usuario, editores);
+  const g = async (codigo, datos) => { setMsg(""); try { await rpc("fn_ca_site_guardar", { p_codigo: codigo, p_datos: datos, p_por: quien }); setMsg("✓ Guardado"); await cargar(); } catch (e) { setMsg(e.message); } };
+  return (
+    <div className="mt-card">
+      <div className="mt-tit">Sites de carga</div>
+      <div className="mt-sub">Dirección de cada site, para calcular los km domicilio–site de cada vehículo (combustible). Se elige el site en la ficha del vehículo.</div>
+      {msg && <div className="mt-msg" style={{ color: msg.startsWith("✓") ? VERDE : ROJO }}>{msg}</div>}
+      <table className="mt-tabla"><thead><tr><th>Código</th><th>Dirección</th><th>Comuna</th><th>Activo</th></tr></thead>
+        <tbody>{filas.map((x) => (
+          <tr key={x.codigo}><td><b>{x.codigo}</b></td>
+            <td><input className="mt-in" disabled={!puede} style={{ width: "100%" }} defaultValue={x.direccion} onBlur={(e) => e.target.value !== x.direccion && g(x.codigo, { direccion: e.target.value })} /></td>
+            <td><input className="mt-in" disabled={!puede} defaultValue={x.comuna || ""} onBlur={(e) => e.target.value !== (x.comuna || "") && g(x.codigo, { comuna: e.target.value })} /></td>
+            <td><input type="checkbox" disabled={!puede} checked={!!x.activo} onChange={(e) => g(x.codigo, { activo: e.target.checked })} /></td></tr>))}</tbody></table>
+      {puede && <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+        <input className="mt-in" placeholder="Código (ej.: ML_RM_SRM4)" value={n.codigo} onChange={(e) => setN({ ...n, codigo: e.target.value.toUpperCase() })} />
+        <input className="mt-in" style={{ minWidth: 320 }} placeholder="Dirección" value={n.direccion} onChange={(e) => setN({ ...n, direccion: e.target.value })} />
+        <input className="mt-in" placeholder="Comuna" value={n.comuna} onChange={(e) => setN({ ...n, comuna: e.target.value })} />
+        <button className="mt-btn pri" disabled={!n.codigo.trim() || !n.direccion.trim()} onClick={async () => { await g(n.codigo.trim(), { direccion: n.direccion.trim(), comuna: n.comuna.trim() || null, nombre: n.codigo.trim() }); setN({ codigo: "", direccion: "", comuna: "" }); }}>Agregar site</button>
+      </div>}
+    </div>
+  );
+}
+
 function Reemplazos({ quien }) {
   const hoy = hoyCL();
   const [lista, setLista] = useState(null);
