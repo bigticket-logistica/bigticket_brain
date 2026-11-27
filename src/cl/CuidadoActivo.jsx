@@ -4750,9 +4750,11 @@ function Combustible({ quien }) {
     </div>
   );
 }
+// C · Combustible por km cubiertos (pedido 25-11, rige el 01-12): C-01 a C-06 en fn_comb_mes
 function CombustibleMes({ mes, quien }) {
   const [filas, setFilas] = useState(null);
   const [sel, setSel] = useState({});
+  const [adic, setAdic] = useState(null);     // patente con la ventana de km adicionales abierta
   const cargar = () => rpc("fn_comb_mes", { p_mes: `${mes}-01` }).then(setFilas).catch(() => setFilas([]));
   useEffect(() => { cargar(); }, [mes]);   // eslint-disable-line react-hooks/exhaustive-deps
   if (filas === null) return <div style={{ color: C.tenue }}>Calculando…</div>;
@@ -4760,54 +4762,181 @@ function CombustibleMes({ mes, quien }) {
   const sobre = filas.filter((x) => Number(x.excedente) > 0);
   const marcados = Object.keys(sel).filter((k) => sel[k]);
   const enviar = async () => {
-    if (!marcados.length || !window.confirm(`Marcar como enviados a cobro los excedentes de ${marcados.length} patente(s). El cobro real queda para el módulo de Conciliaciones. ¿Seguir?`)) return;
-    try { const n = await rpc("fn_comb_enviar_cobro", { p_mes: `${mes}-01`, p_patentes: marcados, p_por: quien }); alert(`${n} excedente(s) marcados como enviados a cobro.`); setSel({}); cargar(); } catch (e) { alert(e.message); }
+    if (!marcados.length || !window.confirm(`Enviar a cobro los excedentes de ${marcados.length} patente(s), con su respaldo (km cubiertos, km fuera de ruta, precio real y motivo). ¿Seguir?`)) return;
+    try { const n = await rpc("fn_comb_enviar_cobro", { p_mes: `${mes}-01`, p_patentes: marcados, p_por: quien }); alert(`${n} excedente(s) enviados a cobro.`); setSel({}); cargar(); } catch (e) { alert(e.message); }
   };
   const exportar = async () => {
     const XLSX = await cargarSheetJS();
-    const data = sobre.map((x) => ({ RUT: x.rut, EMPRESA: x.tercero, PATENTE: x.patente, MONTO: Number(x.gasto), EXCEDENTE: Number(x.excedente) }));
+    const data = sobre.map((x) => ({ RUT: x.rut, EMPRESA: x.tercero, PATENTE: x.patente, MONTO: Number(x.gasto), EXCEDENTE: Number(x.excedente),
+      "KM CUBIERTOS": Number(x.km_cubiertos), "KM FUERA DE RUTA": Number(x.km_fuera), "PRECIO REAL LITRO": Number(x.precio_promedio), "SUBVENCIÓN": Number(x.subvencion), MOTIVO: x.motivo }));
     const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(data), "COMBUSTIBLE"); XLSX.writeFile(wb, `Combustible_${mes}.xlsx`);
   };
   const kpi = (t, v, c = C.navy) => <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, padding: "10px 14px", flex: "1 1 140px" }}><div style={{ fontSize: 20, fontWeight: 800, color: c }}>{v}</div><div style={{ fontSize: 12, color: C.suave }}>{t}</div></div>;
-  const celda = { padding: "7px 9px", borderBottom: `1px solid ${C.borde}`, fontSize: 12.5 };
+  const celda = { padding: "7px 8px", borderBottom: `1px solid ${C.borde}`, fontSize: 12.5, whiteSpace: "nowrap" };
+  const n0 = (v) => (v === null || v === undefined ? "—" : Math.round(Number(v)).toLocaleString("es-CL"));
   return (
     <div>
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
-        {kpi("Gasto del mes", pesos(tot("gasto")))}{kpi("Litros", Math.round(tot("litros")).toLocaleString("es-CL"))}
-        {kpi("Precio promedio por litro", tot("litros") ? pesos(tot("gasto") / tot("litros")) : "—")}
-        {kpi("Vehículos sobre la subvención", sobre.length, C.rojo)}{kpi("Excedente total", pesos(tot("excedente")), C.rojo)}
+        {kpi("Gasto del mes", pesos(tot("gasto")))}{kpi("Subvención aplicada", pesos(tot("subvencion")), C.verde)}
+        {kpi("Vehículos con excedente", sobre.length, C.rojo)}{kpi("Excedente a cobrar", pesos(tot("excedente")), C.rojo)}
+        {kpi("Km fuera de ruta", n0(tot("km_fuera")), C.ambar)}
       </div>
       <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10, flexWrap: "wrap" }}>
         <button style={btn()} disabled={!marcados.length} onClick={enviar}>Enviar a cobro ({marcados.length})</button>
         <button style={btn("sec")} disabled={!sobre.length} onClick={exportar}>Hoja COMBUSTIBLE (Excel)</button>
-        <span style={{ fontSize: 12, color: C.tenue }}>Subvención y tolerancias en Configuración (comb_*). Solo vehículos con tarjeta Copec.</span>
+        <span style={{ fontSize: 12, color: C.tenue }}>Km cubiertos = ruta + traslado domicilio–site (ida y vuelta por día con ruta) + km adicionales. Rendimiento, tope y motivos en Mantenedor › Cuidado de Activo › Combustible. Pincha la patente para registrar km adicionales.</span>
       </div>
       <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, overflowX: "auto" }}>
-        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1000 }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1500 }}>
           <thead><tr style={{ background: C.fondo, textAlign: "left" }}>
-            <th style={celda} />{["Tercero", "Patente", "Cargas", "Litros", "Gasto", "Subvención", "Excedente", "Km Geotab", "Km ruta", "Dif.", "Días marcados", "Cobro"].map((h) => <th key={h} style={{ ...celda, color: C.suave }}>{h}</th>)}
+            <th style={celda} />{["Tercero", "Patente", "Cargas", "Litros", "Rend. real", "Gasto", "Precio real", "Días ruta", "Km ruta", "Km traslado", "Km adic.", "Km cubiertos", "Km Geotab", "Km fuera ruta", "$ km cubiertos", "Subvención", "Excedente", "Motivo", "Cobro"].map((h) => <th key={h} style={{ ...celda, color: C.suave }}>{h}</th>)}
           </tr></thead>
           <tbody>
-            {filas.length === 0 && <tr><td colSpan={13} style={{ ...celda, color: C.tenue, textAlign: "center" }}>Sin cargas de Copec en este mes. Carga el informe.</td></tr>}
-            {filas.map((x) => (
-              <tr key={x.patente}>
-                <td style={celda}>{Number(x.excedente) > 0 && !x.cobro_enviado_at && <input type="checkbox" checked={!!sel[x.patente]} onChange={(e) => setSel({ ...sel, [x.patente]: e.target.checked })} />}</td>
-                <td style={celda}>{x.tercero || "—"}<div style={{ color: C.tenue, fontSize: 11.5 }}>{x.rut}</div></td>
-                <td style={{ ...celda, fontWeight: 800, color: C.navy }}><PatLink p={x.patente} /></td>
-                <td style={celda}>{x.cargas}</td><td style={celda}>{x.litros}</td><td style={{ ...celda, fontWeight: 700 }}>{pesos(x.gasto)}</td><td style={celda}>{pesos(x.subvencion)}</td>
-                <td style={{ ...celda, fontWeight: 800, color: Number(x.excedente) > 0 ? C.rojo : C.tenue }}>{Number(x.excedente) > 0 ? pesos(x.excedente) : "—"}</td>
-                <td style={celda}>{x.km_geotab ?? "—"}</td><td style={celda}>{x.km_ruta ?? "—"}</td>
-                <td style={{ ...celda, color: x.diferencia_pct !== null && Math.abs(x.diferencia_pct) > 20 ? C.ambar : C.texto }}>{x.diferencia_pct !== null ? `${x.diferencia_pct}%` : "—"}</td>
-                <td style={{ ...celda, color: x.dias_marcados ? C.ambar : C.tenue }}>{x.dias_marcados || "—"}</td>
-                <td style={celda}>{x.cobro_enviado_at ? chip("Enviado", C.verdeT, C.verde) : "—"}</td>
-              </tr>
-            ))}
+            {filas.length === 0 && <tr><td colSpan={20} style={{ ...celda, color: C.tenue, textAlign: "center" }}>Sin cargas de Copec en este mes. Carga el informe.</td></tr>}
+            {filas.map((x) => {
+              const rendBajo = x.rend_real !== null && Number(x.rend_real) < Number(x.rendimiento);
+              return (
+                <tr key={x.patente}>
+                  <td style={celda}>{Number(x.excedente) > 0 && !x.cobro_enviado_at && <input type="checkbox" checked={!!sel[x.patente]} onChange={(e) => setSel({ ...sel, [x.patente]: e.target.checked })} />}</td>
+                  <td style={{ ...celda, whiteSpace: "normal", maxWidth: 180 }}>{x.tercero || "—"}<div style={{ color: C.tenue, fontSize: 11.5 }}>{x.rut}</div></td>
+                  <td style={celda}><a style={{ fontWeight: 800, color: C.navy, cursor: "pointer", textDecoration: "underline" }} onClick={() => setAdic(x.patente)} title="Registrar km adicionales">{x.patente}</a>
+                    {x.n_adic > 0 && <span style={{ marginLeft: 4, background: C.navy, color: "#fff", borderRadius: 10, fontSize: 10.5, padding: "1px 6px" }}>{x.n_adic}</span>}
+                    {x.sin_km_dom && <div style={{ color: C.ambar, fontSize: 11 }}>sin km domicilio–site</div>}</td>
+                  <td style={celda}>{x.cargas}</td><td style={celda}>{x.litros}</td>
+                  <td style={{ ...celda, color: rendBajo ? C.rojo : C.texto, fontWeight: rendBajo ? 700 : 400 }} title={`Rendimiento del mantenedor: ${x.rendimiento} km/lt`}>{x.rend_real ?? "—"}<span style={{ color: C.tenue, fontSize: 11 }}> / {x.rendimiento}</span></td>
+                  <td style={{ ...celda, fontWeight: 700 }}>{pesos(x.gasto)}</td>
+                  <td style={celda} title={x.precio_fuente === "flota" ? "Sin cargas propias: promedio de la flota" : "Gasto ÷ litros de la patente"}>{pesos(x.precio_promedio)}{x.precio_fuente === "flota" ? " *" : ""}</td>
+                  <td style={celda}>{x.dias_ruta}</td><td style={celda}>{n0(x.km_ruta)}</td>
+                  <td style={celda} title={x.km_dom !== null ? `${x.km_dom} km ida × 2 × ${x.dias_ruta} días` : "Sin km domicilio–site"}>{n0(x.km_traslado)}</td>
+                  <td style={celda}>{x.km_adic ? n0(x.km_adic) : "—"}</td>
+                  <td style={{ ...celda, fontWeight: 700 }}>{n0(x.km_cubiertos)}</td><td style={celda}>{n0(x.km_geotab)}</td>
+                  <td style={{ ...celda, color: Number(x.km_fuera) > 0 ? C.ambar : C.tenue, fontWeight: Number(x.km_fuera) > 0 ? 700 : 400 }}>{Number(x.km_fuera) > 0 ? n0(x.km_fuera) : "—"}{x.ruta_ficticia && <div style={{ color: C.rojo, fontSize: 11 }}>ruta &gt; GPS</div>}</td>
+                  <td style={celda}>{pesos(x.costo_cubiertos)}</td><td style={{ ...celda, color: C.verde }}>{pesos(x.subvencion)}</td>
+                  <td style={{ ...celda, fontWeight: 800, color: Number(x.excedente) > 0 ? C.rojo : C.tenue }}>{Number(x.excedente) > 0 ? pesos(x.excedente) : "—"}</td>
+                  <td style={celda}>{x.motivo || "—"}</td>
+                  <td style={celda}>{x.cobro_enviado_at ? chip("Enviado", C.verdeT, C.verde) : "—"}</td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
+      </div>
+      <div style={{ fontSize: 11.5, color: C.tenue, marginTop: 6 }}>Rend. real = km Geotab ÷ litros del mes (en rojo si queda bajo el rendimiento del mantenedor: motor con problemas o cargas mal asignadas). * Precio real sin cargas propias: promedio de la flota.</div>
+      {adic && <KmAdicionales patente={adic} mes={mes} quien={quien} onCerrar={() => { setAdic(null); cargar(); }} />}
+    </div>
+  );
+}
+
+// Sección 4 · Registro de km adicionales de subvención (persistente, editable y eliminable con historial)
+function KmAdicionales({ patente, mes, quien, onCerrar }) {
+  const [filas, setFilas] = useState(null);
+  const [motivos, setMotivos] = useState([]);
+  const [n, setN] = useState({ id: null, fecha: "", km: "", motivo: "", detalle: "" });
+  const [msg, setMsg] = useState("");
+  const cargar = () => api(`ca_comb_km_adic_cl?patente=eq.${patente}&mes=eq.${mes}-01&eliminado=is.false&select=*&order=creado_at`).then(setFilas).catch(() => setFilas([]));
+  useEffect(() => { cargar(); api("ca_comb_motivos_cl?activo=is.true&select=*&order=orden").then(setMotivos).catch(() => {}); }, []);   // eslint-disable-line react-hooks/exhaustive-deps
+  const guardar = async () => {
+    setMsg("");
+    try { await rpc("fn_comb_km_adic_guardar", { p_id: n.id, p_patente: patente, p_mes: `${mes}-01`, p_fecha: n.fecha || null, p_km: parseInt(n.km, 10) || 0, p_motivo: n.motivo, p_detalle: n.detalle || null, p_por: quien });
+      setN({ id: null, fecha: "", km: "", motivo: "", detalle: "" }); cargar(); } catch (e) { setMsg(e.message); }
+  };
+  const eliminar = async (x) => { if (!window.confirm(`¿Eliminar ${x.km} km (${x.motivo})? Queda en el historial.`)) return; try { await rpc("fn_comb_km_adic_eliminar", { p_id: x.id, p_por: quien }); cargar(); } catch (e) { setMsg(e.message); } };
+  const nomMot = (c) => (motivos.find((m) => m.codigo === c) || {}).nombre || c;
+  return (
+    <div onClick={onCerrar} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.35)", zIndex: 50, display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: "#fff", borderRadius: 14, padding: 18, width: "min(640px, 94vw)", maxHeight: "86vh", overflowY: "auto" }}>
+        <div style={{ display: "flex", alignItems: "center", marginBottom: 6 }}><b style={{ color: C.navy, fontSize: 16 }}>Km adicionales · {patente} · {mes}</b><span style={{ flex: 1 }} /><button style={btn("sec")} onClick={onCerrar}>Cerrar</button></div>
+        <div style={{ fontSize: 12, color: C.suave, marginBottom: 10 }}>Km que corresponden a BigTicket pero no son ruta ni traslado (por ejemplo, ir a taller). Se suman a los km cubiertos del mes y recalculan la subvención y el excedente. Cada registro queda con quién y cuándo.</div>
+        {filas === null ? <div style={{ color: C.tenue }}>Cargando…</div> : filas.length === 0 ? <div style={{ color: C.tenue, fontSize: 12.5, marginBottom: 8 }}>Sin registros este mes.</div> :
+          filas.map((x) => <div key={x.id} style={{ display: "flex", gap: 8, alignItems: "center", borderBottom: `1px solid ${C.borde}`, padding: "6px 0", fontSize: 12.5 }}>
+            <b>{x.km} km</b><span>{nomMot(x.motivo)}</span><span style={{ color: C.tenue }}>{x.fecha ? fechaCL(x.fecha) : "todo el mes"}</span><span style={{ color: C.suave, flex: 1 }}>{x.detalle || ""}</span>
+            <span style={{ fontSize: 11, color: C.tenue }}>{x.actualizado_por || x.creado_por}</span>
+            <a style={{ cursor: "pointer", color: C.navy }} onClick={() => setN({ id: x.id, fecha: x.fecha || "", km: String(x.km), motivo: x.motivo, detalle: x.detalle || "" })}>Editar</a>
+            <a style={{ cursor: "pointer", color: C.rojo }} onClick={() => eliminar(x)}>Eliminar</a></div>)}
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end", marginTop: 10 }}>
+          <label style={{ fontSize: 12, color: C.suave }}>Fecha (opcional)<br /><input type="date" style={inp} value={n.fecha} min={`${mes}-01`} onChange={(e) => setN({ ...n, fecha: e.target.value })} /></label>
+          <label style={{ fontSize: 12, color: C.suave }}>Km<br /><input type="number" min="1" step="1" style={{ ...inp, width: 90 }} value={n.km} onChange={(e) => setN({ ...n, km: e.target.value })} /></label>
+          <label style={{ fontSize: 12, color: C.suave }}>Motivo<br /><select style={inp} value={n.motivo} onChange={(e) => setN({ ...n, motivo: e.target.value })}><option value="">Elegir…</option>{motivos.map((m) => <option key={m.codigo} value={m.codigo}>{m.nombre}</option>)}</select></label>
+          <label style={{ fontSize: 12, color: C.suave, flex: "1 1 200px" }}>Detalle (opcional)<br /><input style={{ ...inp, width: "100%", boxSizing: "border-box" }} value={n.detalle} onChange={(e) => setN({ ...n, detalle: e.target.value })} placeholder="mantención 30.000 km" /></label>
+          <button style={btn()} disabled={!n.km || !n.motivo} onClick={guardar}>{n.id ? "Guardar cambio" : "Agregar"}</button>
+          {n.id && <button style={btn("sec")} onClick={() => setN({ id: null, fecha: "", km: "", motivo: "", detalle: "" })}>Cancelar</button>}
+        </div>
+        {msg && <div style={{ color: C.rojo, fontSize: 12.5, marginTop: 6 }}>{msg}</div>}
       </div>
     </div>
   );
 }
+
+// Mantenedores comb_* (sección 5): rendimiento y tope por patente, motivos de km adicionales
+function MantCombPatentes({ quien }) {
+  const [filas, setFilas] = useState(null);
+  const [vehs, setVehs] = useState([]);
+  const [def, setDef] = useState({});
+  const [hist, setHist] = useState([]);
+  const [n, setN] = useState({ patente: "", rendimiento: "", tope: "" });
+  const [msg, setMsg] = useState("");
+  const cargar = async () => {
+    const [f, v, c, h] = await Promise.all([api("ca_comb_patente_cl?select=*&order=patente"), api("ca_activos_cl?select=patente,empresa,energia,estado,km_domicilio_site&order=patente&limit=3000"),
+      api("ca_config_cl?clave=in.(comb_rend_default,comb_subvencion_mes)&select=clave,valor"), api("ca_comb_hist_cl?objeto=eq.patente&select=*&order=at.desc&limit=30")]);
+    setFilas(f || []); setVehs(v || []); setDef(Object.fromEntries((c || []).map((x) => [x.clave, x.valor]))); setHist(h || []);
+  };
+  useEffect(() => { cargar().catch(() => setFilas([])); }, []);
+  const g = async (pat, rend, tope) => { setMsg(""); try { await rpc("fn_comb_patente_guardar", { p_patente: pat, p_rendimiento: rend === "" || rend === null ? null : Number(String(rend).replace(",", ".")), p_tope: tope === "" || tope === null ? null : Number(String(tope).replace(/\D/g, "")), p_por: quien }); setMsg("Guardado"); cargar(); } catch (e) { setMsg(e.message); } };
+  if (filas === null) return <div style={{ color: C.tenue }}>Cargando…</div>;
+  const empresa = (p) => (vehs.find((v) => v.patente === p) || {}).empresa || "";
+  const sinFila = vehs.filter((v) => (v.estado || "ACTIVO").toUpperCase() === "ACTIVO" && (v.energia || "COMBUSTION").toUpperCase() !== "ELECTRICA" && !filas.some((f) => f.patente === v.patente));
+  const celda = { padding: "6px 8px", borderBottom: `1px solid ${C.borde}`, fontSize: 12.5 };
+  return (
+    <div>
+      <div style={{ fontSize: 12, color: C.tenue, marginBottom: 10 }}>Rendimiento (km/lt) y tope de subvención por patente. El cálculo del mes usa el valor vigente de aquí, no el real del mes, para que sea estable ante el tercero. Sin rendimiento propio se usa {def.comb_rend_default || "9,0"} km/lt; sin tope propio, {pesos(def.comb_subvencion_mes || 500000)} (Parámetros). Cada cambio queda con quién y cuándo. Los km domicilio–site están en Mantenedor › Vehículos.</div>
+      {msg && <div style={{ fontSize: 12.5, marginBottom: 8, color: msg === "Guardado" ? C.verde : C.rojo }}>{msg}</div>}
+      <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <thead><tr style={{ background: C.fondo, textAlign: "left" }}>{["Patente", "Tercero", "Rendimiento km/lt", "Tope $/mes (vacío = general)", "Última edición"].map((h) => <th key={h} style={{ ...celda, color: C.suave }}>{h}</th>)}</tr></thead>
+          <tbody>{filas.map((x) => (
+            <tr key={x.patente}><td style={celda}><b>{x.patente}</b></td><td style={celda}>{empresa(x.patente)}</td>
+              <td style={celda}><input style={{ ...inp, width: 80 }} defaultValue={x.rendimiento ?? ""} onBlur={(e) => String(e.target.value) !== String(x.rendimiento ?? "") && g(x.patente, e.target.value, x.tope)} /></td>
+              <td style={celda}><input style={{ ...inp, width: 120 }} defaultValue={x.tope ?? ""} onBlur={(e) => String(e.target.value) !== String(x.tope ?? "") && g(x.patente, x.rendimiento, e.target.value)} /></td>
+              <td style={{ ...celda, fontSize: 11.5, color: C.tenue }}>{x.actualizado_por || "carga inicial"} · {fh(x.actualizado_at)}</td></tr>))}</tbody>
+        </table>
+      </div>
+      <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap", alignItems: "flex-end" }}>
+        <label style={{ fontSize: 12, color: C.suave }}>Patente<br /><select style={inp} value={n.patente} onChange={(e) => setN({ ...n, patente: e.target.value })}><option value="">Elegir…</option>{sinFila.map((v) => <option key={v.patente}>{v.patente}</option>)}</select></label>
+        <label style={{ fontSize: 12, color: C.suave }}>Rendimiento<br /><input style={{ ...inp, width: 80 }} value={n.rendimiento} onChange={(e) => setN({ ...n, rendimiento: e.target.value })} placeholder="9,0" /></label>
+        <label style={{ fontSize: 12, color: C.suave }}>Tope (opcional)<br /><input style={{ ...inp, width: 120 }} value={n.tope} onChange={(e) => setN({ ...n, tope: e.target.value })} /></label>
+        <button style={btn()} disabled={!n.patente || !n.rendimiento} onClick={async () => { await g(n.patente, n.rendimiento, n.tope); setN({ patente: "", rendimiento: "", tope: "" }); }}>Agregar patente</button>
+      </div>
+      {hist.length > 0 && <div style={{ marginTop: 14 }}><div style={{ fontWeight: 700, color: C.navy, fontSize: 13, marginBottom: 4 }}>Historial</div>
+        {hist.map((h) => <div key={h.id} style={{ fontSize: 12, color: C.suave }}>{fh(h.at)} · {h.clave} · {h.campo}: {h.antes ?? "—"} → {h.despues ?? "—"} · {h.por}</div>)}</div>}
+    </div>
+  );
+}
+function MantCombMotivos({ quien }) {
+  const [filas, setFilas] = useState(null);
+  const [nuevo, setNuevo] = useState("");
+  const [msg, setMsg] = useState("");
+  const cargar = () => api("ca_comb_motivos_cl?select=*&order=orden").then(setFilas).catch(() => setFilas([]));
+  useEffect(() => { cargar(); }, []);
+  const g = async (x, c) => { setMsg(""); try { await rpc("fn_comb_motivo_guardar", { p_codigo: x.codigo, p_nombre: c.nombre ?? x.nombre, p_activo: c.activo ?? x.activo, p_orden: c.orden ?? x.orden, p_por: quien }); setMsg("Guardado"); cargar(); } catch (e) { setMsg(e.message); } };
+  if (filas === null) return <div style={{ color: C.tenue }}>Cargando…</div>;
+  return (
+    <div>
+      <div style={{ fontSize: 12, color: C.tenue, marginBottom: 10 }}>Motivos que se eligen al registrar km adicionales de subvención (Combustible › pinchar la patente).</div>
+      {msg && <div style={{ fontSize: 12.5, marginBottom: 8, color: msg === "Guardado" ? C.verde : C.rojo }}>{msg}</div>}
+      <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12 }}>
+        {filas.map((x) => <div key={x.codigo} style={{ display: "flex", gap: 10, alignItems: "center", padding: "8px 12px", borderBottom: `1px solid ${C.borde}`, opacity: x.activo ? 1 : 0.5 }}>
+          <input type="number" style={{ ...inp, width: 64 }} defaultValue={x.orden} onBlur={(e) => Number(e.target.value) !== x.orden && g(x, { orden: Number(e.target.value) })} />
+          <input style={{ ...inp, flex: 1 }} defaultValue={x.nombre} onBlur={(e) => e.target.value.trim() && e.target.value !== x.nombre && g(x, { nombre: e.target.value.trim() })} />
+          <label style={{ fontSize: 12.5, display: "flex", gap: 5, alignItems: "center" }}><input type="checkbox" checked={!!x.activo} onChange={(e) => g(x, { activo: e.target.checked })} /> Activo</label></div>)}
+      </div>
+      <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+        <input style={{ ...inp, minWidth: 280 }} placeholder="Motivo nuevo" value={nuevo} onChange={(e) => setNuevo(e.target.value)} />
+        <button style={btn()} disabled={!nuevo.trim()} onClick={async () => { await g({ codigo: nuevo.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "_").slice(0, 40), nombre: nuevo.trim(), activo: true, orden: (filas.length + 1) * 10 }, {}); setNuevo(""); }}>Agregar</button>
+      </div>
+    </div>
+  );
+}
+
 function CombustibleKm({ mes }) {
   const [filas, setFilas] = useState(null);
   const [f, setF] = useState({ marca: "marcados", texto: "" });
@@ -5278,6 +5407,7 @@ export const CA_MANTENEDORES = [
   ["config", "Parámetros", "General"], ["componentes", "Componentes del gasto", "General"], ["proveedores", "Proveedores", "General"],
   ["multas", "Multas (Anexo III)", "General"], ["configuracion", "Tareas, justificaciones y correos", "General"], ["eventos", "Avisos por evento", "General"],
   ["motivos_otra", "Motivos de «Otra detención»", "General"],
+  ["comb_patentes", "Rendimiento y tope por patente", "Combustible"], ["comb_motivos", "Motivos de km adicionales", "Combustible"],
   ["talleres", "Talleres", "Mantenciones"], ["pautas", "Pautas por modelo", "Mantenciones"], ["vidamod", "Vida útil por modelo", "Mantenciones"],
   ["aud_form", "Formularios de auditoría", "Auditorías"], ["aud_tipos", "Tipos de auditoría", "Auditorías"], ["feriados", "Feriados", "Auditorías"],
   ["fleetup", "Alertas de cámara (español)", "GPS y bitácora"], ["bit_ind", "Indicadores de la bitácora", "GPS y bitácora"],
@@ -5295,6 +5425,8 @@ function MantenedorCA({ vista, quien, rol }) {
     case "configuracion": return <Configuracion quien={quien} />;
     case "eventos": return <MantEventos quien={quien} />;
     case "motivos_otra": return <MantMotivosOtraDet quien={quien} />;
+    case "comb_patentes": return <MantCombPatentes quien={quien} />;
+    case "comb_motivos": return <MantCombMotivos quien={quien} />;
     case "talleres": return <TalleresMnt quien={quien} />;
     case "pautas": return <PautasMnt quien={quien} />;
     case "vidamod": return <VidaModeloMnt quien={quien} />;
