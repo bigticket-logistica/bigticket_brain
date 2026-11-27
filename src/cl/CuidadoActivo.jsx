@@ -5047,6 +5047,8 @@ function ChatWhatsApp({ quien }) {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
   const [metricas, setMetricas] = useState([]);
+  const [corr, setCorr] = useState({});          // B-02: correcciones por mensaje de Biggy
+  const [editCorr, setEditCorr] = useState(null); // { id, texto }
   const finRef = useState({ el: null })[0];
   const cargarCfg = () => api("ca_config_cl?clave=in.(ag_modo,wa_modo,wa_prueba,ag_nombre)&select=clave,valor").then((r) => setCfg(Object.fromEntries((r || []).map((x) => [x.clave, x.valor])))).catch(() => {});
   const cargarLista = async () => {
@@ -5065,6 +5067,8 @@ function ChatWhatsApp({ quien }) {
     try {
       const m = await api(`ca_ag_mensajes_cl?conversacion_id=eq.${id}&select=*&order=id`);
       setMsgs(m || []);
+      const cr = await api(`ca_ag_correcciones_cl?conversacion_id=eq.${id}&select=*`).catch(() => []);
+      setCorr(Object.fromEntries((cr || []).map((x) => [x.mensaje_id, x])));
       const ids = (m || []).map((x) => x.cola_id).filter(Boolean);
       if (ids.length) { const c = await api(`ca_wa_cola_cl?id=in.(${ids.join(",")})&select=id,estado,estado_meta,error`); setCola(Object.fromEntries((c || []).map((x) => [x.id, x]))); }
     } catch { /* se reintenta en el próximo ciclo */ }
@@ -5183,6 +5187,30 @@ function ChatWhatsApp({ quien }) {
                     {m.tipo && m.tipo !== "text" && <MediaWa m={m} />}
                     {m.texto && <div style={{ fontSize: 13.5, whiteSpace: "pre-wrap" }}>{m.texto}</div>}
                     <div style={{ fontSize: 10.5, color: C.tenue, textAlign: "right", marginTop: 2 }}>{horaCL(m.creado_at)}{out ? ticks(m) : ""}</div>
+                    {bot && (() => {   // B-02: corrección en sombra
+                      const cx = corr[m.id];
+                      const corregir = async (estado, texto, enviar) => {
+                        try { const r = await rpc("fn_ag_corregir", { p_mensaje: m.id, p_estado: estado, p_correcta: texto || null, p_enviar: !!enviar, p_por: quien }); setEditCorr(null); setMsg(r); await cargarHilo(c.id); } catch (e) { setMsg(e.message); }
+                      };
+                      if (editCorr?.id === m.id) return (
+                        <div style={{ marginTop: 6, borderTop: `1px dashed ${C.borde}`, paddingTop: 6 }}>
+                          <textarea style={{ ...inp, width: "100%", minHeight: 60, boxSizing: "border-box", fontSize: 12.5 }} value={editCorr.texto} onChange={(e) => setEditCorr({ ...editCorr, texto: e.target.value })} placeholder="Escribe la respuesta correcta (Biggy la aprende)" />
+                          <div style={{ display: "flex", gap: 6, marginTop: 4, flexWrap: "wrap" }}>
+                            <button style={{ ...btn(), padding: "3px 10px", fontSize: 12 }} disabled={!editCorr.texto.trim()} onClick={() => corregir("corregida", editCorr.texto, false)}>Guardar corrección</button>
+                            {ventana && <button style={{ ...btn("sec"), padding: "3px 10px", fontSize: 12 }} disabled={!editCorr.texto.trim()} onClick={() => corregir("corregida", editCorr.texto, true)}>Guardar y enviar a la persona</button>}
+                            <button style={{ ...btn("sec"), padding: "3px 10px", fontSize: 12 }} onClick={() => setEditCorr(null)}>Cancelar</button>
+                          </div>
+                        </div>
+                      );
+                      return (
+                        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 3, fontSize: 11 }}>
+                          {cx?.estado === "aprobada" && <span style={{ color: C.verde, fontWeight: 700 }}>✓ Aprobada</span>}
+                          {cx?.estado === "corregida" && <span style={{ color: C.ambar, fontWeight: 700 }} title={cx.respuesta_correcta}>✎ Corregida{cx.enviada ? " y enviada" : ""}</span>}
+                          {!cx && <a style={{ cursor: "pointer", color: C.verde }} onClick={() => corregir("aprobada")}>✓ Bien</a>}
+                          <a style={{ cursor: "pointer", color: C.ambar }} onClick={() => setEditCorr({ id: m.id, texto: cx?.respuesta_correcta || "" })}>✎ {cx?.estado === "corregida" ? "Editar corrección" : "Corregir"}</a>
+                        </div>
+                      );
+                    })()}
                   </div>
                 </div>
               ); })}
@@ -5265,11 +5293,30 @@ function MantAgConfig({ quien }) {
   useEffect(() => { cargar(); }, []);
   const guardar = async (clave, valor) => { setMsg(""); try { await rpc("fn_ca_mantenedor_guardar", { p_tabla: "ca_config_cl", p_clave: clave, p_campo: "valor", p_valor: valor, p_por: quien }); setMsg(`Guardado: ${clave}`); cargar(); } catch (e) { setMsg(e.message); } };
   if (filas === null) return <div style={{ color: C.tenue }}>Cargando…</div>;
-  const orden = [...filas].sort((a, b) => (AG_CFG_ORDEN.indexOf(a.clave) + 1 || 99) - (AG_CFG_ORDEN.indexOf(b.clave) + 1 || 99));
+  const PERS = ["ag_cercania", "ag_formalidad", "ag_max_lineas", "ag_emojis"];
+  const orden = [...filas].filter((x) => !PERS.includes(x.clave)).sort((a, b) => (AG_CFG_ORDEN.indexOf(a.clave) + 1 || 99) - (AG_CFG_ORDEN.indexOf(b.clave) + 1 || 99));
+  const val = (k, d) => (filas.find((x) => x.clave === k) || {}).valor ?? d;
+  const barra = (k, t, izq, der, min = 1, max = 5) => (
+    <div style={{ flex: "1 1 260px" }}>
+      <div style={{ fontSize: 13, fontWeight: 700, color: C.navy }}>{t}: {val(k, "3")}</div>
+      <input type="range" min={min} max={max} step="1" defaultValue={val(k, "3")} style={{ width: "100%" }} onMouseUp={(e) => e.target.value !== val(k, "3") && guardar(k, e.target.value)} onTouchEnd={(e) => e.target.value !== val(k, "3") && guardar(k, e.target.value)} />
+      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: C.tenue }}><span>{izq}</span><span>{der}</span></div>
+    </div>
+  );
   return (
     <div>
       <div style={{ fontSize: 12, color: C.tenue, marginBottom: 10 }}>Cómo se presenta y escribe Biggy, sus textos fijos, el horario de atención humana y a quién deriva. En los textos, {"{nombre}"} se reemplaza por el nombre de la persona. El modo también se cambia desde Cuidado de Activo › Chat WhatsApp.</div>
       {msg && <div style={{ fontSize: 12.5, marginBottom: 8, color: msg.startsWith("Guardado") ? C.verde : C.rojo }}>{msg}</div>}
+      <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, padding: 14, marginBottom: 12 }}>
+        <div style={{ fontWeight: 800, color: C.navy, marginBottom: 8 }}>Personalidad de Biggy</div>
+        <div style={{ display: "flex", gap: 18, flexWrap: "wrap" }}>
+          {barra("ag_cercania", "Cercanía", "seco y directo", "muy cálido")}
+          {barra("ag_formalidad", "Formalidad", "coloquial", "muy formal")}
+          {barra("ag_max_lineas", "Largo máximo (líneas)", "2", "8", 2, 8)}
+          <label style={{ fontSize: 13, fontWeight: 700, color: C.navy, display: "flex", gap: 6, alignItems: "center" }}><input type="checkbox" checked={val("ag_emojis", "no") === "si"} onChange={(e) => guardar("ag_emojis", e.target.checked ? "si" : "no")} /> Usa emojis</label>
+        </div>
+        <div style={{ fontSize: 11.5, color: C.tenue, marginTop: 6 }}>Siempre dentro de los «NUNCA» del cuestionario: nunca promete quitar multas, nunca da datos de otros, nunca inventa. Los cambios rigen desde la próxima respuesta.</div>
+      </div>
       <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12 }}>
         {orden.map((x) => (
           <div key={x.clave} style={{ display: "grid", gridTemplateColumns: "minmax(220px, 1fr) 2fr", gap: 12, padding: "10px 14px", borderBottom: `1px solid ${C.borde}`, alignItems: "start" }}>
@@ -5401,6 +5448,69 @@ function MantAgAseguradoras({ quien }) {
   );
 }
 
+// B-01 · Documentos que alimentan a Biggy (PDF, Word, texto e imágenes); agente-cl extrae su texto
+function MantAgDocs({ quien }) {
+  const [filas, setFilas] = useState(null);
+  const [n, setN] = useState({ titulo: "", descripcion: "", file: null });
+  const [ver, setVer] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+  const cargar = () => api("ca_ag_docs_cl?select=id,titulo,descripcion,nombre_archivo,mime,version,activo,orden,texto_at,error,subido_por,subido_at&order=orden,id").then(setFilas).catch(() => setFilas([]));
+  useEffect(() => { cargar(); const i = setInterval(cargar, 15000); return () => clearInterval(i); }, []);
+  const subir = async (file) => {
+    const limpio = String(file.name || "documento").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^A-Za-z0-9._-]+/g, "_").slice(-90);
+    const path = `docs/${Date.now()}_${limpio}`;
+    const r = await fetch(`${CL_URL}/storage/v1/object/ca-biggy-docs-cl/${path}`, { method: "POST", headers: { apikey: CL_KEY, Authorization: `Bearer ${CL_KEY}`, "Content-Type": file.type || "application/octet-stream" }, body: file });
+    if (!r.ok) throw new Error(`No se pudo subir: ${(await r.text()).slice(0, 150)}`);
+    return path;
+  };
+  const OK = /\.(pdf|docx|txt|md|csv|jpe?g|png)$/i;
+  const guardar = async () => {
+    if (!n.file || !OK.test(n.file.name)) { setMsg("Sube un PDF, Word (.docx), texto o imagen (JPG, PNG)."); return; }
+    setBusy(true); setMsg("");
+    try { const path = await subir(n.file); await rpc("fn_ag_doc_guardar", { p_id: null, p_titulo: n.titulo || n.file.name, p_descripcion: n.descripcion || null, p_path: path, p_nombre: n.file.name, p_mime: n.file.type || null, p_por: quien });
+      setN({ titulo: "", descripcion: "", file: null }); setMsg("✓ Subido. Biggy lo lee en menos de un minuto."); cargar(); } catch (e) { setMsg(e.message); } finally { setBusy(false); }
+  };
+  const nuevaVersion = async (x, file) => {
+    if (!file || !OK.test(file.name)) { setMsg("Formato no soportado."); return; }
+    setBusy(true); setMsg("");
+    try { const path = await subir(file); await rpc("fn_ag_doc_guardar", { p_id: x.id, p_titulo: x.titulo, p_descripcion: x.descripcion, p_path: path, p_nombre: file.name, p_mime: file.type || null, p_por: quien }); setMsg(`✓ Versión ${x.version + 1} de «${x.titulo}» subida.`); cargar(); } catch (e) { setMsg(e.message); } finally { setBusy(false); }
+  };
+  const verTexto = async (x) => { const r = await api(`ca_ag_docs_cl?id=eq.${x.id}&select=titulo,texto`).catch(() => []); setVer((r || [])[0] || null); };
+  if (filas === null) return <div style={{ color: C.tenue }}>Cargando…</div>;
+  return (
+    <div>
+      <div style={{ fontSize: 12, color: C.tenue, marginBottom: 10 }}>Procedimientos, instructivos y documentos del área que Biggy usa para responder (por ejemplo: procedimiento de emergencias y grúas, Anexo III, guía del portal). Biggy lee cada archivo al subirlo; si cambia el documento, sube una versión nueva. Formatos: PDF, Word (.docx), texto e imágenes (JPG, PNG).</div>
+      {msg && <div style={{ fontSize: 12.5, marginBottom: 8, color: msg.startsWith("✓") ? C.verde : C.rojo }}>{msg}</div>}
+      <div style={{ background: "#fff", border: `1px solid ${C.navy}`, borderRadius: 12, padding: 12, marginBottom: 12, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end" }}>
+        <label style={{ fontSize: 12, color: C.suave, flex: "1 1 220px" }}>Título<br /><input style={{ ...inp, width: "100%", boxSizing: "border-box" }} value={n.titulo} onChange={(e) => setN({ ...n, titulo: e.target.value })} placeholder="Procedimiento de emergencias y grúas" /></label>
+        <label style={{ fontSize: 12, color: C.suave, flex: "1 1 220px" }}>Para qué sirve (opcional)<br /><input style={{ ...inp, width: "100%", boxSizing: "border-box" }} value={n.descripcion} onChange={(e) => setN({ ...n, descripcion: e.target.value })} /></label>
+        <label style={{ ...btn("sec"), cursor: "pointer" }}>{n.file ? `📎 ${n.file.name}` : "📎 Elegir archivo"}<input type="file" accept=".pdf,.docx,.txt,.md,.csv,.jpg,.jpeg,.png" style={{ display: "none" }} onChange={(e) => setN({ ...n, file: e.target.files?.[0] || null, titulo: n.titulo || (e.target.files?.[0]?.name || "").replace(/\.[^.]+$/, "") })} /></label>
+        <button style={btn()} disabled={busy || !n.file} onClick={guardar}>{busy ? "Subiendo…" : "Subir"}</button>
+      </div>
+      <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12 }}>
+        {filas.length === 0 && <div style={{ padding: 14, color: C.tenue, fontSize: 12.5 }}>Todavía no hay documentos.</div>}
+        {filas.map((x) => (
+          <div key={x.id} style={{ display: "flex", gap: 10, alignItems: "center", padding: "9px 12px", borderBottom: `1px solid ${C.borde}`, opacity: x.activo ? 1 : 0.5, flexWrap: "wrap" }}>
+            <div style={{ flex: "1 1 260px" }}><b>{x.titulo}</b> <span style={{ fontSize: 11, color: C.tenue }}>v{x.version} · {x.nombre_archivo}</span>{x.descripcion && <div style={{ fontSize: 12, color: C.suave }}>{x.descripcion}</div>}
+              <div style={{ fontSize: 11, color: C.tenue }}>{x.subido_por} · {fh(x.subido_at)}</div></div>
+            <div style={{ fontSize: 12 }}>{x.error ? <span style={{ color: C.rojo }} title={x.error}>⚠ No se pudo leer</span> : x.texto_at ? <a style={{ cursor: "pointer", color: C.verde }} onClick={() => verTexto(x)}>✓ Leído · ver texto</a> : <span style={{ color: C.ambar }}>Leyendo…</span>}</div>
+            {x.error && <a style={{ cursor: "pointer", fontSize: 12, color: C.navy }} onClick={async () => { await rpc("fn_ag_doc_reintentar", { p_id: x.id }); cargar(); }}>Reintentar</a>}
+            <label style={{ ...btn("sec"), cursor: "pointer", padding: "3px 10px", fontSize: 12 }}>Nueva versión<input type="file" accept=".pdf,.docx,.txt,.md,.csv,.jpg,.jpeg,.png" style={{ display: "none" }} onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; nuevaVersion(x, f); }} /></label>
+            <label style={{ fontSize: 12.5, display: "flex", gap: 5, alignItems: "center" }}><input type="checkbox" checked={!!x.activo} onChange={async (e) => { await rpc("fn_ag_doc_activo", { p_id: x.id, p_activo: e.target.checked, p_por: quien }); cargar(); }} /> Activo</label>
+          </div>
+        ))}
+      </div>
+      {ver && <div onClick={() => setVer(null)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.35)", zIndex: 50, display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <div onClick={(e) => e.stopPropagation()} style={{ background: "#fff", borderRadius: 14, padding: 18, width: "min(760px, 94vw)", maxHeight: "84vh", overflowY: "auto" }}>
+          <div style={{ display: "flex", alignItems: "center", marginBottom: 8 }}><b style={{ color: C.navy }}>Lo que Biggy leyó · {ver.titulo}</b><span style={{ flex: 1 }} /><button style={btn("sec")} onClick={() => setVer(null)}>Cerrar</button></div>
+          <pre style={{ whiteSpace: "pre-wrap", fontSize: 12.5, fontFamily: "inherit", color: C.texto }}>{ver.texto}</pre>
+        </div>
+      </div>}
+    </div>
+  );
+}
+
 // ═══ Mantenedores de Cuidado de Activo: se muestran en el Mantenedor general del Brain (Mantenedor.jsx) ═══
 // [clave, nombre, grupo]. El Mantenedor arma las pestañas con esta lista; aquí se dibuja cada uno.
 export const CA_MANTENEDORES = [
@@ -5412,7 +5522,7 @@ export const CA_MANTENEDORES = [
   ["aud_form", "Formularios de auditoría", "Auditorías"], ["aud_tipos", "Tipos de auditoría", "Auditorías"], ["feriados", "Feriados", "Auditorías"],
   ["fleetup", "Alertas de cámara (español)", "GPS y bitácora"], ["bit_ind", "Indicadores de la bitácora", "GPS y bitácora"],
   ["wa_contactos", "Contactos", "WhatsApp"], ["wa_plantillas", "Plantillas", "WhatsApp"], ["wa_envios", "Envíos", "WhatsApp"],
-  ["ag_config", "Agente: configuración", "WhatsApp"], ["ag_consultas", "Agente: consultas por persona", "WhatsApp"],
+  ["ag_config", "Agente: configuración y personalidad", "WhatsApp"], ["ag_docs", "Agente: documentos", "WhatsApp"], ["ag_consultas", "Agente: consultas por persona", "WhatsApp"],
   ["ag_faq", "Agente: respuestas tipo", "WhatsApp"], ["ag_aseguradoras", "Agente: aseguradoras (grúas)", "WhatsApp"],
 ];
 function MantenedorCA({ vista, quien, rol }) {
@@ -5440,6 +5550,7 @@ function MantenedorCA({ vista, quien, rol }) {
     case "wa_envios": return <EnviosWa />;
     case "ag_config": return <MantAgConfig quien={quien} />;
     case "ag_consultas": return <MantAgConsultas quien={quien} />;
+    case "ag_docs": return <MantAgDocs quien={quien} />;
     case "ag_faq": return <MantAgFaq quien={quien} />;
     case "ag_aseguradoras": return <MantAgAseguradoras quien={quien} />;
     default: return <div style={{ color: C.tenue }}>Mantenedor no encontrado.</div>;
