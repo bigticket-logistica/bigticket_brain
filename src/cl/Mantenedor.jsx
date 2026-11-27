@@ -209,6 +209,8 @@ function Vehiculos({ quien, usuario }) {
       if ((o[k] ?? null) !== (v ?? null)) cambios[k] = v ?? null;
     }));
     if (!ed.nuevo && !Object.keys(cambios).length) { setMsg("No hay cambios."); return; }
+    // Vigencia (pedido 27-11): el cambio de km o dirección rige desde la fecha indicada (por defecto, hoy)
+    if (("km_domicilio_site" in cambios || "direccion_estacionamiento" in cambios) && d.km_vigente_desde) cambios.km_vigente_desde = d.km_vigente_desde;
     if (!ed.nuevo && "tipo_tarifa" in cambios && o.tipo_tarifa && !window.confirm(`Cambiar el tipo para tarifa de ${o.tipo_tarifa} a ${cambios.tipo_tarifa || "(vacío)"} cambia cómo se le paga a esta patente en el Maestro (Vehículos BT). ¿Continuar?`)) return;
     setBusy(true); setMsg("");
     try { await rpc("fn_ca_vehiculo_guardar", { p_patente: ed.nuevo ? pat : o.patente, p_datos: cambios, p_por: quien }); setMsg(`✓ ${ed.nuevo ? pat + " agregado" : o.patente + " guardado"}`); setEd(null); await cargar(); }
@@ -269,6 +271,11 @@ function Vehiculos({ quien, usuario }) {
             </div>
           ))}
           {ed.datos.km_domicilio_site !== null && ed.datos.km_domicilio_site !== undefined && ed.datos.km_domicilio_site !== "" && <div style={{ fontSize: 11.5, color: "#64748b" }}>Para combustible se usa ida y vuelta: {(Number(String(ed.datos.km_domicilio_site).replace(",", ".")) * 2).toFixed(1)} km por día con ruta.</div>}
+          {!ed.nuevo && puede && (String(ed.datos.km_domicilio_site ?? "") !== String(ed.orig.km_domicilio_site ?? "") || String(ed.datos.direccion_estacionamiento ?? "") !== String(ed.orig.direccion_estacionamiento ?? "")) && (
+            <label className="mt-lbl" style={{ maxWidth: 260, marginTop: 6, color: NAVY }}>El cambio de dirección o km rige desde
+              <input className="mt-in" type="date" value={ed.datos.km_vigente_desde || new Date().toLocaleDateString("en-CA", { timeZone: "America/Santiago" })} onChange={(e) => setEd({ ...ed, datos: { ...ed.datos, km_vigente_desde: e.target.value } })} />
+              <span style={{ fontWeight: 400, fontSize: 11 }}>Los días anteriores siguen con la dirección anterior en el cálculo de combustible.</span>
+            </label>)}
           {hist && <div style={{ marginTop: 10, maxHeight: 260, overflowY: "auto" }}>
             <table className="mt-tabla"><thead><tr><th>Fecha</th><th>Campo</th><th>Antes</th><th>Después</th><th>Por</th></tr></thead>
               <tbody>{hist.length === 0 ? <tr><td colSpan={5}>Sin cambios registrados.</td></tr> : hist.map((h) => (

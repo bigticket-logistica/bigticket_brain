@@ -4827,7 +4827,7 @@ function CombustibleMes({ mes, quien }) {
                     {x.n_adic > 0 && <span style={{ marginLeft: 4, background: C.navy, color: "#fff", borderRadius: 10, fontSize: 10.5, padding: "1px 6px" }}>{x.n_adic}</span>}
                     {x.sin_km_dom && <div style={{ color: C.ambar, fontSize: 11 }}>sin km domicilio–site</div>}</td>
                   <td style={celda}>{x.cargas}</td><td style={celda}>{x.litros}</td>
-                  <td style={{ ...celda, color: rendBajo ? C.rojo : C.texto, fontWeight: rendBajo ? 700 : 400 }} title={`Rendimiento del mantenedor: ${x.rendimiento} km/lt`}>{x.rend_real ?? "—"}<span style={{ color: C.tenue, fontSize: 11 }}> / {x.rendimiento}</span></td>
+                  <td style={{ ...celda, color: rendBajo ? C.rojo : C.texto, fontWeight: rendBajo ? 700 : 400 }} title={`Rendimiento usado: ${x.rendimiento} km/lt (${x.rend_fuente === "patente" ? "propio de la patente" : x.rend_fuente === "modelo" ? "de su marca, modelo y año" : "general"})`}>{x.rend_real ?? "—"}<span style={{ color: C.tenue, fontSize: 11 }}> / {x.rendimiento}</span></td>
                   <td style={{ ...celda, fontWeight: 700 }}>{pesos(x.gasto)}</td>
                   <td style={celda} title={x.precio_fuente === "flota" ? "Sin cargas propias: promedio de la flota" : "Gasto ÷ litros de la patente"}>{pesos(x.precio_promedio)}{x.precio_fuente === "flota" ? " *" : ""}</td>
                   <td style={celda}>{x.dias_ruta}</td><td style={celda}>{n0(x.km_ruta)}</td>
@@ -4912,7 +4912,7 @@ function MantCombPatentes({ quien }) {
   const celda = { padding: "6px 8px", borderBottom: `1px solid ${C.borde}`, fontSize: 12.5 };
   return (
     <div>
-      <div style={{ fontSize: 12, color: C.tenue, marginBottom: 10 }}>Rendimiento (km/lt) y tope de subvención por patente. El cálculo del mes usa el valor vigente de aquí, no el real del mes, para que sea estable ante el tercero. Sin rendimiento propio se usa {def.comb_rend_default || "9,0"} km/lt; sin tope propio, {pesos(def.comb_subvencion_mes || 500000)} (Parámetros). Cada cambio queda con quién y cuándo. Los km domicilio–site están en Mantenedor › Vehículos.</div>
+      <div style={{ fontSize: 12, color: C.tenue, marginBottom: 10 }}>Rendimiento (km/lt) y tope de subvención por patente. Un rendimiento propio de la patente manda sobre el de su marca, modelo y año; déjalo vacío para usar el del modelo. El cálculo del mes usa el valor vigente de aquí, no el real del mes, para que sea estable ante el tercero. Sin rendimiento propio se usa {def.comb_rend_default || "9,0"} km/lt; sin tope propio, {pesos(def.comb_subvencion_mes || 500000)} (Parámetros). Cada cambio queda con quién y cuándo. Los km domicilio–site están en Mantenedor › Vehículos.</div>
       {msg && <div style={{ fontSize: 12.5, marginBottom: 8, color: msg === "Guardado" ? C.verde : C.rojo }}>{msg}</div>}
       <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, overflowX: "auto" }}>
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
@@ -4935,6 +4935,56 @@ function MantCombPatentes({ quien }) {
     </div>
   );
 }
+// Rendimiento por marca, modelo y año (pedido de Eduardo, 27-11): desde el manual del vehículo, editable
+function MantCombModelos({ quien }) {
+  const [filas, setFilas] = useState(null);
+  const [vehs, setVehs] = useState([]);
+  const [msg, setMsg] = useState("");
+  const vacio = { id: null, marca: "", modelo: "", anio: "", rendimiento: "", fuente: "" };
+  const [n, setN] = useState(vacio);
+  const cargar = async () => {
+    const [f, v] = await Promise.all([api("ca_comb_rend_modelo_cl?select=*&order=marca,modelo,anio"), api("ca_activos_cl?select=patente,marca,modelo,anio,energia,estado&limit=3000")]);
+    setFilas(f || []); setVehs((v || []).filter((x) => (x.estado || "ACTIVO").toUpperCase() === "ACTIVO" && (x.energia || "COMBUSTION").toUpperCase() !== "ELECTRICA" && x.marca && x.modelo));
+  };
+  useEffect(() => { cargar().catch(() => setFilas([])); }, []);
+  if (filas === null) return <div style={{ color: C.tenue }}>Cargando…</div>;
+  const g = async (x) => { setMsg(""); try { await rpc("fn_comb_rend_modelo_guardar", { p_id: x.id, p_marca: x.marca, p_modelo: x.modelo, p_anio: x.anio === "" || x.anio === null ? null : Number(x.anio), p_rend: x.rendimiento === "" || x.rendimiento === null ? null : Number(String(x.rendimiento).replace(",", ".")), p_fuente: x.fuente || null, p_por: quien }); setN(vacio); setMsg("Guardado"); cargar(); } catch (e) { setMsg(e.message); } };
+  const tiene = (v) => filas.some((r) => r.marca === String(v.marca).toUpperCase() && r.modelo === String(v.modelo).toUpperCase() && (r.anio === null || r.anio === v.anio));
+  const combos = {}; vehs.forEach((v) => { const k = `${String(v.marca).toUpperCase()}|${String(v.modelo).toUpperCase()}|${v.anio || ""}`; (combos[k] = combos[k] || { ...v, n: 0, con: tiene(v) }).n++; });
+  const faltan = Object.values(combos).filter((c) => !c.con);
+  const celda = { padding: "6px 8px", borderBottom: `1px solid ${C.borde}`, fontSize: 12.5 };
+  return (
+    <div>
+      <div style={{ fontSize: 12, color: C.tenue, marginBottom: 10 }}>Rendimiento (km/lt) según el manual de cada marca, modelo y año. El año es opcional: sin año aplica a todos los años de ese modelo. Si una patente tiene un rendimiento propio (Rendimiento y tope por patente), manda ese.</div>
+      {msg && <div style={{ fontSize: 12.5, marginBottom: 8, color: msg === "Guardado" ? C.verde : C.rojo }}>{msg}</div>}
+      {faltan.length > 0 && <div style={{ background: C.ambarT, border: `1px solid ${C.ambar}`, borderRadius: 10, padding: "8px 12px", marginBottom: 10, fontSize: 12.5 }}>
+        <b style={{ color: C.ambar }}>Modelos de la flota sin rendimiento ({faltan.length}):</b>{" "}
+        {faltan.map((c, i) => <a key={i} style={{ cursor: "pointer", color: C.navy, marginRight: 10 }} onClick={() => setN({ ...vacio, marca: String(c.marca).toUpperCase(), modelo: String(c.modelo).toUpperCase(), anio: c.anio || "" })}>{c.marca} {c.modelo} {c.anio || ""} ({c.n})</a>)}
+      </div>}
+      <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <thead><tr style={{ background: C.fondo, textAlign: "left" }}>{["Marca", "Modelo", "Año", "Rendimiento km/lt", "Fuente", "Patentes", "Última edición", ""].map((h) => <th key={h} style={{ ...celda, color: C.suave }}>{h}</th>)}</tr></thead>
+          <tbody>{filas.length === 0 ? <tr><td colSpan={8} style={{ ...celda, color: C.tenue }}>Todavía sin rendimientos por modelo.</td></tr> : filas.map((x) => (
+            <tr key={x.id}><td style={celda}>{x.marca}</td><td style={celda}>{x.modelo}</td><td style={celda}>{x.anio || "todos"}</td><td style={{ ...celda, fontWeight: 700 }}>{x.rendimiento}</td><td style={celda}>{x.fuente || "—"}</td>
+              <td style={celda}>{vehs.filter((v) => String(v.marca).toUpperCase() === x.marca && String(v.modelo).toUpperCase() === x.modelo && (x.anio === null || v.anio === x.anio)).length}</td>
+              <td style={{ ...celda, fontSize: 11.5, color: C.tenue }}>{x.actualizado_por} · {fh(x.actualizado_at)}</td>
+              <td style={celda}><a style={{ cursor: "pointer", color: C.navy }} onClick={() => setN({ id: x.id, marca: x.marca, modelo: x.modelo, anio: x.anio || "", rendimiento: String(x.rendimiento), fuente: x.fuente || "" })}>Editar</a>{" · "}
+                <a style={{ cursor: "pointer", color: C.rojo }} onClick={() => window.confirm(`¿Eliminar el rendimiento de ${x.marca} ${x.modelo}?`) && g({ ...x, rendimiento: null })}>Eliminar</a></td></tr>))}</tbody>
+        </table>
+      </div>
+      <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap", alignItems: "flex-end" }}>
+        <label style={{ fontSize: 12, color: C.suave }}>Marca<br /><input style={{ ...inp, width: 130 }} value={n.marca} onChange={(e) => setN({ ...n, marca: e.target.value.toUpperCase() })} /></label>
+        <label style={{ fontSize: 12, color: C.suave }}>Modelo<br /><input style={{ ...inp, width: 200 }} value={n.modelo} onChange={(e) => setN({ ...n, modelo: e.target.value.toUpperCase() })} /></label>
+        <label style={{ fontSize: 12, color: C.suave }}>Año (opcional)<br /><input type="number" style={{ ...inp, width: 90 }} value={n.anio} onChange={(e) => setN({ ...n, anio: e.target.value })} /></label>
+        <label style={{ fontSize: 12, color: C.suave }}>Km/lt<br /><input style={{ ...inp, width: 80 }} value={n.rendimiento} onChange={(e) => setN({ ...n, rendimiento: e.target.value })} placeholder="9,0" /></label>
+        <label style={{ fontSize: 12, color: C.suave, flex: "1 1 160px" }}>Fuente<br /><input style={{ ...inp, width: "100%", boxSizing: "border-box" }} value={n.fuente} onChange={(e) => setN({ ...n, fuente: e.target.value })} placeholder="Manual del fabricante" /></label>
+        <button style={btn()} disabled={!n.marca || !n.modelo || !n.rendimiento} onClick={() => g(n)}>{n.id ? "Guardar cambio" : "Agregar"}</button>
+        {n.id && <button style={btn("sec")} onClick={() => setN(vacio)}>Cancelar</button>}
+      </div>
+    </div>
+  );
+}
+
 function MantCombMotivos({ quien }) {
   const [filas, setFilas] = useState(null);
   const [nuevo, setNuevo] = useState("");
@@ -5541,7 +5591,7 @@ export const CA_MANTENEDORES = [
   ["config", "Parámetros", "General"], ["componentes", "Componentes del gasto", "General"], ["proveedores", "Proveedores", "General"],
   ["multas", "Multas (Anexo III)", "General"], ["configuracion", "Tareas, justificaciones y correos", "General"], ["eventos", "Avisos por evento", "General"],
   ["motivos_otra", "Motivos de «Otra detención»", "General"],
-  ["comb_patentes", "Rendimiento y tope por patente", "Combustible"], ["comb_motivos", "Motivos de km adicionales", "Combustible"],
+  ["comb_modelos", "Rendimiento por marca, modelo y año", "Combustible"], ["comb_patentes", "Rendimiento y tope por patente", "Combustible"], ["comb_motivos", "Motivos de km adicionales", "Combustible"],
   ["talleres", "Talleres", "Mantenciones"], ["pautas", "Pautas por modelo", "Mantenciones"], ["vidamod", "Vida útil por modelo", "Mantenciones"],
   ["aud_form", "Formularios de auditoría", "Auditorías"], ["aud_tipos", "Tipos de auditoría", "Auditorías"], ["feriados", "Feriados", "Auditorías"],
   ["fleetup", "Alertas de cámara (español)", "GPS y bitácora"], ["bit_ind", "Indicadores de la bitácora", "GPS y bitácora"],
@@ -5560,6 +5610,7 @@ function MantenedorCA({ vista, quien, rol }) {
     case "eventos": return <MantEventos quien={quien} />;
     case "motivos_otra": return <MantMotivosOtraDet quien={quien} />;
     case "comb_patentes": return <MantCombPatentes quien={quien} />;
+    case "comb_modelos": return <MantCombModelos quien={quien} />;
     case "comb_motivos": return <MantCombMotivos quien={quien} />;
     case "talleres": return <TalleresMnt quien={quien} />;
     case "pautas": return <PautasMnt quien={quien} />;
