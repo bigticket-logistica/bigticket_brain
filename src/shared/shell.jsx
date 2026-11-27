@@ -20,7 +20,9 @@ function horaDe(pais) {
   return `${f.replace(/ /g, "-")}, ${h} hrs`;
 }
 
-export function ShellBrain({ pais, paisCode, usuario, mods, labels, tab, onTab, onCambiarPais, onLogout, children }) {
+// extra: algo para mostrar en el encabezado (p. ej. la campanita de avisos de Chile).
+// ocultas: subpestañas que el usuario no ve («modulo:sub»), según el mantenedor de accesos de Chile.
+export function ShellBrain({ pais, paisCode, usuario, mods, labels, tab, onTab, onCambiarPais, onLogout, children, extra = null, ocultas = null }) {
   const [menu, setMenu] = useState(false);
   const [panel, setPanel] = useState(false);
   const [hora, setHora] = useState(horaDe(pais));
@@ -42,6 +44,7 @@ export function ShellBrain({ pais, paisCode, usuario, mods, labels, tab, onTab, 
           <span className="bs-rotulo">Brain</span>
         </div>
         <div className="bs-acciones">
+          {extra}
           <button className="bs-pais" onClick={onCambiarPais} title="Cambiar operación">
             {paisCode && <img src={`https://flagcdn.com/w40/${paisCode}.png`} alt="" />}
             <span>{pais}</span>
@@ -71,7 +74,7 @@ export function ShellBrain({ pais, paisCode, usuario, mods, labels, tab, onTab, 
         <aside className={`bs-lateral${menu ? " abierto" : ""}`}>
           <nav className="bs-nav">
             {mods.map((k) => {
-              const subs = listas[k];
+              const subs = listas[k] && ocultas ? listas[k].filter((t) => !ocultas.includes(`${k}:${t.id}`)) : listas[k];
               const open = !!subs && abierto === k;
               return (
                 <div key={k}>
