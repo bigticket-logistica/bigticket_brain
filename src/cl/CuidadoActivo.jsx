@@ -1426,7 +1426,7 @@ function DetalleAuditoria({ a, quien, onListo }) {
       setD(r);
       const marc = {}; for (const x of r.fotos || []) if (x.biggy_estado === "rehacer") marc[x.item] = true;
       setRehacer(marc);
-      const paths = [...new Set((r.fotos || []).flatMap((x) => [x.path, x.anterior_path]).filter(Boolean))];
+      const paths = [...new Set((r.fotos || []).flatMap((x) => [x.path, x.anterior_path, ...(x.extras || []).map((e) => e.path)]).filter(Boolean))];
       const pares = await Promise.all(paths.map(async (p) => [p, await urlFirmada(p, "ca-auditorias-cl")]));
       setUrls(Object.fromEntries(pares));
     } catch (e) { setMsg(e.message); setD({ fotos: [], checklist: [] }); }
@@ -1436,7 +1436,8 @@ function DetalleAuditoria({ a, quien, onListo }) {
     try {
       let evidencias = [];
       if (v === "cumple_hallazgo") {
-        evidencias = (d.fotos || []).filter((x) => evid[x.item] && x.path).map((x) => ({ bucket: "ca-auditorias-cl", path: x.path, nombre: x.nombre }));
+        evidencias = (d.fotos || []).filter((x) => evid[x.item] && x.path).flatMap((x) => [{ bucket: "ca-auditorias-cl", path: x.path, nombre: x.nombre },
+          ...(x.extras || []).map((e, i) => ({ bucket: "ca-auditorias-cl", path: e.path, nombre: `${x.nombre} (${i + 2})` }))]);   // A-01: con sus fotos adicionales
         for (const f of extras) {
           const limpio = String(f.name || "evidencia").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^A-Za-z0-9._-]+/g, "_").slice(-80);
           const path = `hal/${a.id}/${Date.now()}_${limpio}`;
@@ -1481,6 +1482,12 @@ function DetalleAuditoria({ a, quien, onListo }) {
                 <div><div style={{ fontSize: 11, color: C.suave, marginBottom: 2 }}>Actual · {fh(x.tomada_at)}</div>{img(x.path, x.nombre)}</div>
                 <div><div style={{ fontSize: 11, color: C.suave, marginBottom: 2 }}>Anterior</div>{img(x.anterior_path, x.nombre + " anterior")}</div>
               </div>
+              {(x.extras || []).length > 0 && <div style={{ marginTop: 6 }}>
+                <div style={{ fontSize: 11, color: C.suave, marginBottom: 2 }}>Fotos adicionales del hallazgo ({x.extras.length})</div>
+                <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>{x.extras.map((e) => urls[e.path]
+                  ? <a key={e.item} href={urls[e.path]} target="_blank" rel="noreferrer"><img src={urls[e.path]} alt={e.item} style={{ width: 70, height: 70, objectFit: "cover", borderRadius: 6, border: `1px solid ${C.borde}` }} /></a>
+                  : <span key={e.item} style={{ fontSize: 11, color: C.tenue }}>…</span>)}</div>
+              </div>}
               {x.biggy_nota && <div style={{ fontSize: 12, color: C.texto, marginTop: 6 }}>{x.biggy_nota}</div>}
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 6, fontSize: 12 }}>
                 <label style={{ display: "flex", gap: 6, alignItems: "center", cursor: "pointer", color: C.rojo, fontWeight: 700 }}>
